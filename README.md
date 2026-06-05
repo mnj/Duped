@@ -36,17 +36,18 @@ The database is stored in the app data directory (`~/.local/share/com.duped.app/
 
 ### Temporary Storage Mode
 
+You can enable temporary storage mode using either a command-line flag or environment variable:
+
 ```bash
+# Using command-line flag (with built binary)
+./src-tauri/target/release/duped --tmp-db
+
+# Using environment variable (works with both dev and release)
 DUPED_TMP_DB=1 bun tauri dev
-```
-
-Or with the built binary:
-
-```bash
 DUPED_TMP_DB=1 ./src-tauri/target/release/duped
 ```
 
-When `DUPED_TMP_DB` environment variable is set:
+When temporary storage mode is enabled:
 - The SQLite database is created in `/tmp` during scanning
 - This reduces disk writes on your main storage
 - After scanning completes, the database is automatically moved to the app data directory
