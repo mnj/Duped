@@ -144,17 +144,27 @@ impl Database {
     }
 
     pub fn get_duplicate_groups(&self, scan_id: i64) -> Result<Vec<DuplicateGroup>> {
+        self.get_duplicate_groups_paginated(scan_id, 0, 100)
+    }
+
+    pub fn get_duplicate_groups_paginated(
+        &self,
+        scan_id: i64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<DuplicateGroup>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
             "SELECT hash, size FROM files
              WHERE scan_id = ?1 AND hash IS NOT NULL
              GROUP BY hash HAVING COUNT(*) > 1
-             ORDER BY size DESC",
+             ORDER BY size DESC
+             LIMIT ?2 OFFSET ?3",
         )?;
 
         let groups: Vec<(String, i64)> = stmt
-            .query_map(params![scan_id], |row| {
+            .query_map(params![scan_id, limit, offset], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })?
             .filter_map(|r| r.ok())
@@ -185,6 +195,19 @@ impl Database {
         }
 
         Ok(result)
+    }
+
+    pub fn get_duplicate_group_count(&self, scan_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM (
+                SELECT hash FROM files
+                WHERE scan_id = ?1 AND hash IS NOT NULL
+                GROUP BY hash HAVING COUNT(*) > 1
+            )",
+            params![scan_id],
+            |row| row.get(0),
+        )
     }
 
     pub fn get_stats(&self, scan_id: i64) -> Result<Stats> {

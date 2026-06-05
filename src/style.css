@@ -312,6 +312,15 @@ code {
   line-height: 1.4;
 }
 
+.info-note.tmp-mode {
+  background: var(--bg4);
+  border-color: var(--accent);
+}
+
+.info-note.tmp-mode svg {
+  color: var(--green);
+}
+
 .progress-bar {
   width: 100%;
   max-width: 400px;

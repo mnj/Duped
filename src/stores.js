@@ -7,6 +7,7 @@ export const appState = {
   scanning: false,
   progress: null,
   duplicates: [],
+  totalGroups: 0,
   stats: null,
   dbPath: null,
   activeView: "grid",
@@ -53,6 +54,11 @@ export async function startScan(path) {
     notify();
   });
 
+  await listen("db-moved", (event) => {
+    appState.dbPath = event.payload;
+    notify();
+  });
+
   await invoke("start_scan", { path });
 }
 
@@ -70,9 +76,18 @@ export async function openDatabase(path) {
 }
 
 export async function loadDuplicates() {
-  appState.duplicates = await invoke("get_duplicates");
+  const count = await invoke("get_duplicate_count");
+  appState.totalGroups = count;
+  appState.duplicates = await invoke("get_duplicates_paginated", { offset: 0, limit: 100 });
   appState.stats = await invoke("get_stats");
   notify();
+}
+
+export async function loadMoreDuplicates(offset, limit = 100) {
+  const more = await invoke("get_duplicates_paginated", { offset, limit });
+  appState.duplicates = [...appState.duplicates, ...more];
+  notify();
+  return more.length;
 }
 
 export async function listScans() {

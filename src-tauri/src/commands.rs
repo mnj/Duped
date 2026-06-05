@@ -26,15 +26,17 @@ pub struct AppState {
     pub scan_id: Mutex<Option<i64>>,
     pub progress: Mutex<Option<Arc<ScanProgress>>>,
     pub db_path: Mutex<Option<PathBuf>>,
+    pub use_tmp_db: bool,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(use_tmp_db: bool) -> Self {
         Self {
             db: Mutex::new(None),
             scan_id: Mutex::new(None),
             progress: Mutex::new(None),
             db_path: Mutex::new(None),
+            use_tmp_db,
         }
     }
 }
@@ -66,11 +68,26 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn scan_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn scan_db_path(app: &AppHandle, use_tmp: bool) -> Result<PathBuf, String> {
+    if use_tmp {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("duped_scan_{}.db", timestamp);
+        Ok(std::env::temp_dir().join(filename))
+    } else {
+        let dir = app_data_dir(app)?;
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("scan_{}.db", timestamp);
+        Ok(dir.join(filename))
+    }
+}
+
+fn move_db_from_tmp(tmp_path: &PathBuf, app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app_data_dir(app)?;
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("scan_{}.db", timestamp);
-    Ok(dir.join(filename))
+    let filename = tmp_path.file_name().ok_or("Invalid temp path")?;
+    let final_path = dir.join(filename);
+    std::fs::rename(tmp_path, &final_path)
+        .map_err(|e| format!("Failed to move database: {}", e))?;
+    Ok(final_path)
 }
 
 #[tauri::command]
@@ -79,7 +96,8 @@ pub async fn start_scan(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<i64, String> {
-    let db_path = scan_db_path(&app)?;
+    let use_tmp = state.use_tmp_db;
+    let db_path = scan_db_path(&app, use_tmp)?;
 
     let db = Arc::new(
         Database::new(&db_path).map_err(|e| format!("Failed to create database: {}", e))?,
@@ -95,7 +113,7 @@ pub async fn start_scan(
         let mut scan_lock = state.scan_id.lock().unwrap();
         *scan_lock = Some(scan_id);
         let mut path_lock = state.db_path.lock().unwrap();
-        *path_lock = Some(db_path);
+        *path_lock = Some(db_path.clone());
     }
 
     let progress = Arc::new(ScanProgress::new());
@@ -107,6 +125,7 @@ pub async fn start_scan(
     let app_clone = app.clone();
     let db_clone = db.clone();
     let progress_clone = progress.clone();
+    let db_path_clone = db_path.clone();
 
     std::thread::spawn(move || {
         let app_handle = app_clone;
@@ -124,6 +143,12 @@ pub async fn start_scan(
         } else {
             let _ = db.complete_scan(scan_id);
             let _ = db.create_indexes();
+            
+            if use_tmp {
+                if let Ok(final_path) = move_db_from_tmp(&db_path_clone, &app_handle) {
+                    let _ = app_handle.emit("db-moved", final_path.to_string_lossy().to_string());
+                }
+            }
         }
 
         let stats = db.get_stats(scan_id).unwrap_or(Stats {
@@ -262,6 +287,26 @@ pub fn get_duplicates(state: tauri::State<'_, AppState>) -> Result<Vec<Duplicate
     let scan_id = get_scan_id(&state)?;
     db.get_duplicate_groups(scan_id)
         .map_err(|e| format!("Failed to get duplicates: {}", e))
+}
+
+#[tauri::command]
+pub fn get_duplicates_paginated(
+    state: tauri::State<'_, AppState>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<DuplicateGroup>, String> {
+    let db = get_db(&state)?;
+    let scan_id = get_scan_id(&state)?;
+    db.get_duplicate_groups_paginated(scan_id, offset, limit)
+        .map_err(|e| format!("Failed to get duplicates: {}", e))
+}
+
+#[tauri::command]
+pub fn get_duplicate_count(state: tauri::State<'_, AppState>) -> Result<i64, String> {
+    let db = get_db(&state)?;
+    let scan_id = get_scan_id(&state)?;
+    db.get_duplicate_group_count(scan_id)
+        .map_err(|e| format!("Failed to get duplicate count: {}", e))
 }
 
 #[tauri::command]

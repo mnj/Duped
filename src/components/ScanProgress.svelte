@@ -34,6 +34,17 @@
     </h1>
   </div>
 
+  {#if state.dbPath?.includes('/tmp/')}
+    <div class="info-note tmp-mode">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2v20M2 12h20"/>
+      </svg>
+      <span>
+        Using temporary storage in /tmp to reduce disk writes. Database will be moved to app data after scanning completes.
+      </span>
+    </div>
+  {/if}
+
   <div class="stats-grid">
     <div class="stat">
       <span class="value">{progress ? formatNumber(progress.files_walked) : "0"}</span>

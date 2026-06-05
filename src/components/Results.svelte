@@ -64,7 +64,7 @@
         <span>Total Size</span>
       </div>
       <div class="stat-item accent">
-        <strong>{formatNumber(state.stats.duplicate_groups)}</strong>
+        <strong>{formatNumber(state.totalGroups)}</strong>
         <span>Duplicate Groups</span>
       </div>
       <div class="stat-item accent">
