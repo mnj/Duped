@@ -3,6 +3,7 @@
   import CardGrid from "./views/CardGrid.svelte";
   import TableView from "./views/TableView.svelte";
   import SplitPane from "./views/SplitPane.svelte";
+  import CompactList from "./views/CompactList.svelte";
 
   let state = $state(appState);
 
@@ -14,6 +15,7 @@
     { id: "grid", label: "Card Grid", icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" },
     { id: "table", label: "Table", icon: "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" },
     { id: "split", label: "Split Pane", icon: "M3 3h18v18H3zM12 3v18" },
+    { id: "compact", label: "Compact List", icon: "M3 6h18M3 12h18M3 18h18" },
   ];
 
   function switchView(id) {
@@ -85,6 +87,8 @@
       <TableView groups={state.duplicates} />
     {:else if state.activeView === "split"}
       <SplitPane groups={state.duplicates} />
+    {:else if state.activeView === "compact"}
+      <CompactList groups={state.duplicates} />
     {/if}
   </div>
 </div>
