@@ -1,5 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
   import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
 
   const similarityOptions = [95, 90, 85];
@@ -26,45 +27,15 @@
     loadedImages = {};
   }
 
-  async function loadPhotos() {
-    loading = true;
-    resetLoadedImages();
-    try {
-      const page = await invoke("get_photo_groups_page", {
-        minSimilarity: minSimilarity / 100.0,
-        offset: 0,
-        limit: 1,
-      });
-      totalGroups = page.total;
-      currentGroup = page.groups[0] || null;
-      currentIndex = 0;
-    } catch (err) {
-      console.error("Failed to load photos:", err);
-      totalGroups = 0;
-      currentGroup = null;
-    }
-    loading = false;
-  }
-
-  async function reloadWithThreshold() {
-    await loadPhotos();
-  }
-
-  $effect(() => {
-    loadPhotos();
-  });
-
-  $effect(() => {
-    const group = currentGroup;
+  async function loadImagesForGroup(group) {
     const generation = ++imageLoadGeneration;
-
     resetLoadedImages();
 
     if (!group) {
       return;
     }
 
-    Promise.all(group.files.map(async (file) => {
+    await Promise.all(group.files.map(async (file) => {
       try {
         const preview = await invoke("load_image_preview", { path: file.path });
         if (generation !== imageLoadGeneration) {
@@ -81,24 +52,49 @@
         }
       }
     }));
+  }
 
-    return () => {
-      imageLoadGeneration++;
-      revokeImageUrls();
-    };
+  async function loadPhotos() {
+    loading = true;
+    try {
+      const page = await invoke("get_photo_groups_page", {
+        minSimilarity: minSimilarity / 100.0,
+        offset: 0,
+        limit: 1,
+      });
+      totalGroups = page.total;
+      currentGroup = page.groups[0] || null;
+      currentIndex = 0;
+      await loadImagesForGroup(currentGroup);
+    } catch (err) {
+      console.error("Failed to load photos:", err);
+      totalGroups = 0;
+      currentGroup = null;
+      resetLoadedImages();
+    }
+    loading = false;
+  }
+
+  async function reloadWithThreshold() {
+    await loadPhotos();
+  }
+
+  onMount(() => {
+    loadPhotos();
   });
 
   async function loadCurrentGroup() {
     loading = true;
-    resetLoadedImages();
     try {
       currentGroup = await invoke("get_photo_group", {
         minSimilarity: minSimilarity / 100.0,
         index: currentIndex,
       });
+      await loadImagesForGroup(currentGroup);
     } catch (err) {
       console.error("Failed to load current photo group:", err);
       currentGroup = null;
+      resetLoadedImages();
     }
     loading = false;
   }
@@ -152,6 +148,7 @@
           ...currentGroup,
           files: currentGroup.files.filter((f) => f.path !== path),
         };
+        await loadImagesForGroup(currentGroup);
       }
       if (currentGroup && currentGroup.files.length <= 1) {
         totalGroups = Math.max(0, totalGroups - 1);

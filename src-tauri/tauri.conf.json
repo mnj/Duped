@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-cli/schema.json",
   "productName": "Duped",
   "version": "0.1.0",
-  "identifier": "com.duped.app",
+  "identifier": "com.duped",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -25,6 +25,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [
+      "icons/icon.png"
+    ]
   }
 }

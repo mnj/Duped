@@ -20,9 +20,15 @@ bun install
 # Run in development mode
 bun tauri dev
 
-# Build for production
-bun tauri build
+# Build desktop bundles with the project's linuxdeploy workaround
+bun run tauri:build
+
+# Build only the AppImage
+bun run tauri:build:appimage
 ```
+
+On Linux, use `bun run tauri:build` or `bun run tauri:build:appimage` instead of `bun tauri build`.
+These scripts set `NO_STRIP=1`, which avoids a `linuxdeploy` failure when stripping newer Arch/CachyOS system libraries during AppImage packaging.
 
 ## Usage
 
@@ -33,7 +39,7 @@ bun tauri dev
 ```
 
 On Linux, scans use `/tmp` by default while building results, then move the finished database into the app data directory.
-On other platforms, the database is stored directly in the app data directory (`~/.local/share/com.duped.app/`) unless temporary storage is explicitly enabled.
+On other platforms, the database is stored directly in the app data directory (`~/.local/share/com.duped/`) unless temporary storage is explicitly enabled.
 
 ### Temporary Storage Mode
 
