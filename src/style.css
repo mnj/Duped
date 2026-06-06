@@ -1243,6 +1243,22 @@ code {
   color: var(--text2);
 }
 
+.sbs-ffprobe {
+  width: 100%;
+  max-height: 18rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .sbs-actions {
   display: flex;
   gap: 0.75rem;
@@ -1522,6 +1538,20 @@ code {
 .photo-size {
   font-size: 0.8rem;
   color: var(--text2);
+}
+
+.photo-ffprobe {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  max-height: 18rem;
+  overflow: auto;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  color: var(--text2);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .photo-trash {

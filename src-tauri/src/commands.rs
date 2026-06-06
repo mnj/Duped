@@ -56,6 +56,7 @@ pub struct FileMetadata {
     pub duration_seconds: Option<f64>,
     pub codec: Option<String>,
     pub format_name: Option<String>,
+    pub ffprobe_streams_json: Option<String>,
 }
 
 pub struct AppState {
@@ -64,16 +65,18 @@ pub struct AppState {
     pub progress: Mutex<Option<Arc<ScanProgress>>>,
     pub db_path: Mutex<Option<PathBuf>>,
     pub use_tmp_db: bool,
+    pub storage_dir: Option<PathBuf>,
 }
 
 impl AppState {
-    pub fn new(use_tmp_db: bool) -> Self {
+    pub fn new(use_tmp_db: bool, storage_dir: Option<PathBuf>) -> Self {
         Self {
             db: Mutex::new(None),
             scan_id: Mutex::new(None),
             progress: Mutex::new(None),
             db_path: Mutex::new(None),
             use_tmp_db,
+            storage_dir,
         }
     }
 }
@@ -102,10 +105,12 @@ fn get_scan_id(state: &AppState) -> Result<i64, String> {
 }
 
 fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(dir) = std::env::current_dir() {
-        if std::fs::create_dir_all(&dir).is_ok() {
-            return Ok(dir);
-        }
+    let state: tauri::State<'_, AppState> = app.state();
+
+    if let Some(dir) = state.storage_dir.clone() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create configured storage dir: {}", e))?;
+        return Ok(dir);
     }
 
     let dir = app
@@ -134,8 +139,23 @@ fn move_db_from_tmp(tmp_path: &PathBuf, app: &AppHandle) -> Result<PathBuf, Stri
     let dir = storage_dir(app)?;
     let filename = tmp_path.file_name().ok_or("Invalid temp path")?;
     let final_path = dir.join(filename);
-    std::fs::copy(tmp_path, &final_path)
-        .map_err(|e| format!("Failed to copy database: {}", e))?;
+    eprintln!(
+        "finalize_scan: moving database from '{}' to '{}'",
+        tmp_path.display(),
+        final_path.display()
+    );
+    match std::fs::rename(tmp_path, &final_path) {
+        Ok(_) => {
+            eprintln!("finalize_scan: moved database with rename");
+        }
+        Err(_) => {
+            eprintln!("finalize_scan: rename failed, falling back to copy");
+            std::fs::copy(tmp_path, &final_path)
+                .map_err(|e| format!("Failed to copy database: {}", e))?;
+            let _ = std::fs::remove_file(tmp_path);
+            eprintln!("finalize_scan: copied database and removed temp file");
+        }
+    }
     Ok(final_path)
 }
 
@@ -390,6 +410,7 @@ pub fn finalize_scan(
 ) -> Result<Option<String>, String> {
     let use_tmp = state.use_tmp_db;
     if !use_tmp {
+        eprintln!("finalize_scan: tmp db disabled, nothing to finalize");
         return Ok(None);
     }
 
@@ -397,6 +418,7 @@ pub fn finalize_scan(
         let path_lock = state.db_path.lock().unwrap();
         path_lock.clone().ok_or("No database path")?
     };
+    eprintln!("finalize_scan: current database path is '{}'", tmp_path.display());
 
     {
         let mut db_lock = state.db.lock().unwrap();
@@ -416,6 +438,8 @@ pub fn finalize_scan(
         let mut path_lock = state.db_path.lock().unwrap();
         *path_lock = Some(final_path);
     }
+
+    eprintln!("finalize_scan: reopened finalized database at '{}'", final_path_str);
 
     Ok(Some(final_path_str))
 }
@@ -490,6 +514,23 @@ pub fn load_image_preview(path: String) -> Result<ImagePreview, String> {
     Ok(ImagePreview { bytes, mime_type })
 }
 
+fn prune_ffprobe_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("disposition");
+            for child in map.values_mut() {
+                prune_ffprobe_value(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                prune_ffprobe_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tauri::command]
 pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
     let path_buf = PathBuf::from(&path);
@@ -500,6 +541,7 @@ pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
         duration_seconds: None,
         codec: None,
         format_name: None,
+        ffprobe_streams_json: None,
     };
 
     if let Ok((width, height)) = image::image_dimensions(&path_buf) {
@@ -510,10 +552,9 @@ pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
     let ffprobe_output = Command::new("ffprobe")
         .args([
             "-v",
-            "error",
-            "-print_format",
+            "quiet",
+            "-output_format",
             "json",
-            "-show_format",
             "-show_streams",
             &path,
         ])
@@ -529,6 +570,10 @@ pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse ffprobe output: {}", e))?;
+
+    let mut pruned_value = value.clone();
+    prune_ffprobe_value(&mut pruned_value);
+    metadata.ffprobe_streams_json = serde_json::to_string_pretty(&pruned_value).ok();
 
     if let Some(format) = value.get("format") {
         if metadata.duration_seconds.is_none() {

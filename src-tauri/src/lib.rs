@@ -4,14 +4,15 @@ mod phasher;
 mod scanner;
 
 use commands::AppState;
+use std::path::PathBuf;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run(use_tmp_db: bool) {
+pub fn run(use_tmp_db: bool, storage_dir: Option<PathBuf>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(AppState::new(use_tmp_db))
+        .manage(AppState::new(use_tmp_db, storage_dir))
         .invoke_handler(tauri::generate_handler![
             commands::start_scan,
             commands::abort_scan,

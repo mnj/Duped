@@ -128,6 +128,9 @@
               <span class="sbs-file-size">{fileMetadata[file.path].codec}</span>
             {/if}
           </div>
+          {#if fileMetadata[file.path]?.ffprobe_streams_json}
+            <pre class="sbs-ffprobe">{fileMetadata[file.path].ffprobe_streams_json}</pre>
+          {/if}
           <div class="sbs-actions">
             <button class="sbs-keep" onclick={() => handleTrash(currentGroup.files[i === 0 ? 1 : 0].path)}>
               Keep This

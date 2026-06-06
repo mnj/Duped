@@ -43,8 +43,8 @@ The compiled binary is copied to `output/trixie-release/` on the host after the 
 bun tauri dev
 ```
 
-On Linux, scans use `/tmp` by default while building results, then move the finished database into the app's current working directory.
-On other platforms, the database is stored directly in the app's current working directory unless temporary storage is explicitly enabled.
+On Linux, scans use `/tmp` by default while building results, then move the finished database into the configured storage directory.
+If no storage directory is configured, the app falls back to the platform app-data directory.
 
 ### Temporary Storage Mode
 
@@ -54,6 +54,9 @@ You can control temporary storage mode using command-line flags or environment v
 # Disable /tmp usage, even on Linux where it is the default
 ./src-tauri/target/release/duped --no-tmp-db
 
+# Store completed databases in a specific directory
+./src-tauri/target/release/duped --db-dir /path/to/duped-data
+
 # Force-enable /tmp usage on platforms where it is not the default
 DUPED_TMP_DB=1 bun tauri dev
 DUPED_TMP_DB=1 ./src-tauri/target/release/duped
@@ -61,12 +64,16 @@ DUPED_TMP_DB=1 ./src-tauri/target/release/duped
 # Force-disable /tmp usage
 DUPED_NO_TMP_DB=1 bun tauri dev
 DUPED_NO_TMP_DB=1 ./src-tauri/target/release/duped
+
+# Configure the storage directory via environment
+DUPED_DB_DIR=/path/to/duped-data bun tauri dev
+DUPED_DB_DIR=/path/to/duped-data ./src-tauri/target/release/duped
 ```
 
 When temporary storage mode is enabled:
 - The SQLite database is created in `/tmp` during scanning
 - This reduces disk writes on your main storage
-- After scanning completes, the database is automatically moved to the app's current working directory
+- After scanning completes, the database is automatically moved to the configured storage directory
 - The UI will show a notification that temporary storage mode is active
 
 This is particularly useful when:
@@ -77,7 +84,7 @@ This is particularly useful when:
 Linux note:
 - This project now defaults to `/tmp` on Linux because it is commonly backed by `tmpfs`
 - macOS and other platforms do not assume the same memory-backed behavior by default
-- If the app is launched without a usable working directory, it falls back to the platform app-data directory
+- If no storage directory is configured, it falls back to the platform app-data directory
 
 ## Architecture
 
