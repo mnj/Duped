@@ -1,11 +1,9 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { formatBytes, trashFile, formatNumber } from "../../stores.js";
+  import { formatBytes, trashFile } from "../../stores.js";
 
-  let { scanId } = $props();
-
-  let photoPairs = $state([]);
+  let photoGroups = $state([]);
   let minSimilarity = $state(80);
   let currentIndex = $state(0);
   let loading = $state(true);
@@ -13,10 +11,10 @@
   async function loadPhotos() {
     loading = true;
     try {
-      photoPairs = await invoke("get_photo_pairs", { minSimilarity: minSimilarity / 100.0 });
+      photoGroups = await invoke("get_photo_groups", { minSimilarity: minSimilarity / 100.0 });
     } catch (err) {
       console.error("Failed to load photos:", err);
-      photoPairs = [];
+      photoGroups = [];
     }
     loading = false;
   }
@@ -30,14 +28,14 @@
     loadPhotos();
   });
 
-  let currentPair = $derived(photoPairs[currentIndex] || null);
+  let currentGroup = $derived(photoGroups[currentIndex] || null);
 
   function prev() {
     if (currentIndex > 0) currentIndex--;
   }
 
   function next() {
-    if (currentIndex < photoPairs.length - 1) currentIndex++;
+    if (currentIndex < photoGroups.length - 1) currentIndex++;
   }
 
   function fileName(path) {
@@ -51,9 +49,12 @@
   async function handleTrash(path) {
     if (confirm(`Move "${fileName(path)}" to trash?`)) {
       await trashFile(path);
-      photoPairs = photoPairs.filter(p => p.file_a.path !== path && p.file_b.path !== path);
-      if (currentIndex >= photoPairs.length) {
-        currentIndex = Math.max(0, photoPairs.length - 1);
+      photoGroups = photoGroups.map(group => ({
+        ...group,
+        files: group.files.filter(f => f.path !== path)
+      })).filter(group => group.files.length > 1);
+      if (currentIndex >= photoGroups.length) {
+        currentIndex = Math.max(0, photoGroups.length - 1);
       }
     }
   }
@@ -73,15 +74,15 @@
       />
     </div>
 
-    {#if photoPairs.length > 0}
+    {#if photoGroups.length > 0}
       <div class="photo-nav">
-        <button onclick={prev} disabled={currentIndex === 0} aria-label="Previous pair">
+        <button onclick={prev} disabled={currentIndex === 0} aria-label="Previous group">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 18 9 12 15 6"/>
           </svg>
         </button>
-        <span class="photo-counter">{currentIndex + 1} / {photoPairs.length}</span>
-        <button onclick={next} disabled={currentIndex >= photoPairs.length - 1} aria-label="Next pair">
+        <span class="photo-counter">{currentIndex + 1} / {photoGroups.length}</span>
+        <button onclick={next} disabled={currentIndex >= photoGroups.length - 1} aria-label="Next group">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"/>
           </svg>
@@ -93,25 +94,30 @@
   {#if loading}
     <div class="empty">
       <div class="spinner"></div>
-      <p>Loading photo pairs...</p>
+      <p>Loading photo groups...</p>
     </div>
-  {:else if currentPair}
+  {:else if currentGroup}
     <div class="photo-comparison">
       <div class="photo-header">
-        <span class="photo-sim">
-          {#if currentPair.similarity >= 95}
+        <div class="photo-sim">
+          <span class="photo-group-size">{currentGroup.files.length} similar images</span>
+          {#if currentGroup.avg_similarity >= 95}
             <span class="badge green">Exact match</span>
-          {:else if currentPair.similarity >= 80}
+          {:else if currentGroup.avg_similarity >= 80}
             <span class="badge amber">Near match</span>
           {:else}
             <span class="badge red">Loose match</span>
           {/if}
-          {currentPair.similarity.toFixed(1)}% similar
-        </span>
+          <span class="sim-detail">
+            Min: {currentGroup.min_similarity.toFixed(1)}%
+            &middot;
+            Avg: {currentGroup.avg_similarity.toFixed(1)}%
+          </span>
+        </div>
       </div>
 
       <div class="photo-panels">
-        {#each [currentPair.file_a, currentPair.file_b] as file, i}
+        {#each currentGroup.files as file, i}
           <div class="photo-panel">
             <div class="photo-label">File {i + 1}</div>
             <div class="photo-img-wrapper">
@@ -153,7 +159,7 @@
         <circle cx="8.5" cy="8.5" r="1.5"/>
         <polyline points="21 15 16 10 5 21"/>
       </svg>
-      <p>No photo pairs found with {minSimilarity}% similarity</p>
+      <p>No photo groups found with {minSimilarity}% similarity</p>
       <p class="hint">Try lowering the similarity threshold</p>
     </div>
   {/if}

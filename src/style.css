@@ -1382,6 +1382,16 @@ code {
   color: var(--text);
 }
 
+.photo-group-size {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.photo-sim .sim-detail {
+  font-size: 0.8rem;
+  color: var(--text3);
+}
+
 .photo-sim .badge {
   padding: 0.15rem 0.5rem;
   border-radius: 10px;
@@ -1406,7 +1416,7 @@ code {
 
 .photo-panels {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1rem;
   flex: 1;
   min-height: 0;

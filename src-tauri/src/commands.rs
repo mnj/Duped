@@ -28,10 +28,10 @@ pub struct MergeResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PhotoPair {
-    pub file_a: FileRecord,
-    pub file_b: FileRecord,
-    pub similarity: f64,
+pub struct PhotoGroup {
+    pub files: Vec<FileRecord>,
+    pub min_similarity: f64,
+    pub avg_similarity: f64,
 }
 
 pub struct AppState {
@@ -403,29 +403,50 @@ pub fn trash_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_photo_pairs(
+pub fn get_photo_groups(
     state: tauri::State<'_, AppState>,
     min_similarity: f64,
-) -> Result<Vec<PhotoPair>, String> {
+) -> Result<Vec<PhotoGroup>, String> {
     let db = get_db(&state)?;
     let scan_id = get_scan_id(&state)?;
-    let candidates = db
-        .get_photo_candidates(scan_id, min_similarity)
-        .map_err(|e| format!("Failed to get photo candidates: {}", e))?;
+    let groups = db
+        .get_photo_groups(scan_id, min_similarity)
+        .map_err(|e| format!("Failed to get photo groups: {}", e))?;
 
-    let pairs: Vec<PhotoPair> = candidates
+    let result: Vec<PhotoGroup> = groups
         .into_iter()
-        .map(|(a, b)| {
-            let similarity = crate::phasher::similarity_pct(a.phash.unwrap(), b.phash.unwrap());
-            PhotoPair {
-                file_a: a,
-                file_b: b,
-                similarity,
+        .map(|files| {
+            let n = files.len();
+            let mut min_sim = 100.0f64;
+            let mut total_sim = 0.0f64;
+            let mut count = 0i64;
+
+            for i in 0..n {
+                if let Some(hash_a) = files[i].phash {
+                    for j in (i + 1)..n {
+                        if let Some(hash_b) = files[j].phash {
+                            let sim = crate::phasher::similarity_pct(hash_a, hash_b);
+                            if sim < min_sim {
+                                min_sim = sim;
+                            }
+                            total_sim += sim;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+
+            let avg_sim = if count > 0 { total_sim / count as f64 } else { 0.0 };
+
+            PhotoGroup {
+                files,
+                min_similarity: min_sim,
+                avg_similarity: avg_sim,
             }
         })
         .collect();
 
-    Ok(pairs)
+    Ok(result)
 }
 
 fn get_dismissed_scans(dir: &PathBuf) -> Result<Vec<PathBuf>, String> {

@@ -399,11 +399,11 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn get_photo_candidates(
+    pub fn get_photo_groups(
         &self,
         scan_id: i64,
         min_similarity: f64,
-    ) -> Result<Vec<(FileRecord, FileRecord)>> {
+    ) -> Result<Vec<Vec<FileRecord>>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, path, hash, size, modified, phash FROM files
@@ -425,26 +425,63 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
 
-        let mut pairs = Vec::new();
-        for i in 0..files.len() {
+        let n = files.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut rank = vec![0usize; n];
+
+        fn find(parent: &mut [usize], x: usize) -> usize {
+            if parent[x] != x {
+                parent[x] = find(parent, parent[x]);
+            }
+            parent[x]
+        }
+
+        fn union(parent: &mut [usize], rank: &mut [usize], x: usize, y: usize) {
+            let rx = find(parent, x);
+            let ry = find(parent, y);
+            if rx != ry {
+                if rank[rx] < rank[ry] {
+                    parent[rx] = ry;
+                } else if rank[rx] > rank[ry] {
+                    parent[ry] = rx;
+                } else {
+                    parent[ry] = rx;
+                    rank[rx] += 1;
+                }
+            }
+        }
+
+        for i in 0..n {
             if let Some(phash_a) = files[i].phash {
-                for j in (i + 1)..files.len() {
+                for j in (i + 1)..n {
                     if let Some(phash_b) = files[j].phash {
                         let sim = crate::phasher::similarity_pct(phash_a, phash_b);
                         if sim >= min_similarity {
-                            pairs.push((files[i].clone(), files[j].clone()));
+                            union(&mut parent, &mut rank, i, j);
                         }
                     }
                 }
             }
         }
 
-        pairs.sort_by(|a, b| {
-            let sim_a = crate::phasher::similarity_pct(a.0.phash.unwrap(), a.1.phash.unwrap());
-            let sim_b = crate::phasher::similarity_pct(b.0.phash.unwrap(), b.1.phash.unwrap());
-            sim_b.partial_cmp(&sim_a).unwrap()
-        });
+        let mut groups_map: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+        for i in 0..n {
+            let root = find(&mut parent, i);
+            groups_map.entry(root).or_default().push(i);
+        }
 
-        Ok(pairs)
+        let mut groups: Vec<Vec<FileRecord>> = groups_map
+            .into_values()
+            .filter(|indices| indices.len() > 1)
+            .map(|indices| {
+                let mut group: Vec<FileRecord> = indices.into_iter().map(|i| files[i].clone()).collect();
+                group.sort_by_key(|f| f.path.clone());
+                group
+            })
+            .collect();
+
+        groups.sort_by_key(|g| -(g.len() as i64));
+
+        Ok(groups)
     }
 }
