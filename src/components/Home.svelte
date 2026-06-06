@@ -1,5 +1,5 @@
 <script>
-  import { startScan, openDatabase, selectFolder, selectFile, listScans, dismissScan, formatBytes } from "../stores.js";
+  import { startScan, openDatabase, selectFolder, selectFile, listScans, dismissScan, addPathToScan, mergeDatabases, formatBytes } from "../stores.js";
 
   let recentScans = $state([]);
   let loading = $state(false);
@@ -60,6 +60,38 @@
     }
   }
 
+  async function handleAddPath(e, dbPath) {
+    e.stopPropagation();
+    try {
+      const folder = await selectFolder();
+      if (folder) {
+        loading = true;
+        await addPathToScan(dbPath, folder);
+      }
+    } catch (err) {
+      console.error("Failed to add path to scan:", err);
+      loading = false;
+    }
+  }
+
+  async function handleMerge(e, targetDbPath) {
+    e.stopPropagation();
+    try {
+      const sourceFile = await selectFile();
+      if (sourceFile) {
+        loading = true;
+        const result = await mergeDatabases(sourceFile);
+        alert(`Merged ${result.scans_merged} scans and ${result.files_merged} files`);
+        await loadRecent();
+      }
+    } catch (err) {
+      console.error("Failed to merge databases:", err);
+      alert("Failed to merge databases: " + err.message);
+    } finally {
+      loading = false;
+    }
+  }
+
   function scanName(path) {
     const match = path.match(/scan_(\d{8})_(\d{6})\.db/);
     if (match) {
@@ -110,9 +142,33 @@
             <span>{scanName(scan)}</span>
             <span class="path">{scan}</span>
             <button
-              class="delete-btn"
+              class="action-btn add-btn"
+              onclick={(e) => handleAddPath(e, scan)}
+              aria-label="Add path to scan"
+              title="Add another path to this scan"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+            <button
+              class="action-btn merge-btn"
+              onclick={(e) => handleMerge(e, scan)}
+              aria-label="Merge databases"
+              title="Merge another database into this one"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                <line x1="12" y1="8" x2="12" y2="16"/>
+                <line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+            </button>
+            <button
+              class="action-btn delete-btn"
               onclick={(e) => handleDismissScan(e, scan)}
               aria-label="Dismiss scan"
+              title="Dismiss this scan from the list"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"/>

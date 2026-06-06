@@ -24,6 +24,8 @@ pub fn run(use_tmp_db: bool) {
             commands::dismiss_scan,
             commands::finalize_scan,
             commands::trash_file,
+            commands::add_path_to_scan,
+            commands::merge_databases,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

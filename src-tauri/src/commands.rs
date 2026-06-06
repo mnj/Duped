@@ -21,6 +21,12 @@ pub struct ScanComplete {
     pub aborted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MergeResult {
+    pub scans_merged: usize,
+    pub files_merged: usize,
+}
+
 pub struct AppState {
     pub db: Mutex<Option<Arc<Database>>>,
     pub scan_id: Mutex<Option<i64>>,
@@ -407,6 +413,183 @@ fn save_dismissed_scans(dir: &PathBuf, dismissed: &[PathBuf]) -> Result<(), Stri
     std::fs::write(&config_path, content)
         .map_err(|e| format!("Failed to write dismissed scans: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn add_path_to_scan(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    db_path: String,
+    new_path: String,
+) -> Result<i64, String> {
+    let db = Arc::new(
+        Database::new(&db_path).map_err(|e| format!("Failed to open database: {}", e))?,
+    );
+
+    let scan_id = db
+        .create_scan(&new_path)
+        .map_err(|e| format!("Failed to create scan: {}", e))?;
+
+    {
+        let mut db_lock = state.db.lock().unwrap();
+        *db_lock = Some(db.clone());
+        let mut scan_lock = state.scan_id.lock().unwrap();
+        *scan_lock = Some(scan_id);
+        let mut path_lock = state.db_path.lock().unwrap();
+        *path_lock = Some(PathBuf::from(&db_path));
+    }
+
+    let progress = Arc::new(ScanProgress::new());
+    {
+        let mut prog_lock = state.progress.lock().unwrap();
+        *prog_lock = Some(progress.clone());
+    }
+
+    let app_clone = app.clone();
+    let db_clone = db.clone();
+    let progress_clone = progress.clone();
+
+    std::thread::spawn(move || {
+        let app_handle = app_clone;
+        let db = db_clone;
+        let progress = progress_clone;
+
+        let _ = walk_and_collect(&new_path, &db, scan_id, &progress);
+
+        if !progress.is_aborted() {
+            let _ = hash_candidates(&db, scan_id, &progress);
+        }
+
+        if progress.is_aborted() {
+            let _ = db.abort_scan(scan_id);
+        } else {
+            let _ = db.complete_scan(scan_id);
+            let _ = db.create_indexes();
+        }
+
+        let stats = db.get_stats(scan_id).unwrap_or(Stats {
+            file_count: 0,
+            total_size: 0,
+            duplicate_groups: 0,
+            duplicate_files: 0,
+            wasted_space: 0,
+        });
+
+        let _ = app_handle.emit(
+            "scan-complete",
+            ScanComplete {
+                scan_id,
+                stats,
+                aborted: progress.is_aborted(),
+            },
+        );
+    });
+
+    let app_clone = app.clone();
+    let progress_clone = progress.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if progress_clone.is_aborted() {
+                break;
+            }
+            let phase = if progress_clone.files_to_hash.load(std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
+                "walking"
+            } else {
+                "hashing"
+            };
+            let _ = app_clone.emit(
+                "scan-progress",
+                ProgressEvent {
+                    phase: phase.to_string(),
+                    files_walked: progress_clone
+                        .files_walked
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    files_to_hash: progress_clone
+                        .files_to_hash
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    files_hashed: progress_clone
+                        .files_hashed
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    bytes_hashed: progress_clone
+                        .bytes_hashed
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                },
+            );
+        }
+    });
+
+    Ok(scan_id)
+}
+
+#[tauri::command]
+pub fn merge_databases(
+    state: tauri::State<'_, AppState>,
+    source_db_path: String,
+) -> Result<MergeResult, String> {
+    let _target_db_path = {
+        let path_lock = state.db_path.lock().unwrap();
+        path_lock
+            .as_ref()
+            .ok_or("No target database loaded")?
+            .clone()
+    };
+
+    let source_db = Database::new(&source_db_path)
+        .map_err(|e| format!("Failed to open source database: {}", e))?;
+
+    let target_db = {
+        let db_lock = state.db.lock().unwrap();
+        db_lock
+            .as_ref()
+            .ok_or("No target database loaded")?
+            .clone()
+    };
+
+    let source_scans = source_db
+        .get_all_scans()
+        .map_err(|e| format!("Failed to get source scans: {}", e))?;
+
+    let mut files_merged = 0;
+    let mut scans_merged = 0;
+
+    for source_scan in source_scans {
+        let new_scan_id = target_db
+            .create_scan(&source_scan.path)
+            .map_err(|e| format!("Failed to create scan: {}", e))?;
+
+        let source_files = source_db
+            .get_files_for_scan(source_scan.id)
+            .map_err(|e| format!("Failed to get source files: {}", e))?;
+
+        for file in source_files {
+            target_db
+                .insert_file(
+                    new_scan_id,
+                    &file.path,
+                    file.hash.as_deref(),
+                    file.size,
+                    file.modified,
+                )
+                .map_err(|e| format!("Failed to insert file: {}", e))?;
+            files_merged += 1;
+        }
+
+        if source_scan.status == "completed" {
+            let _ = target_db.complete_scan(new_scan_id);
+        }
+
+        scans_merged += 1;
+    }
+
+    let _ = target_db.create_indexes();
+
+    Ok(MergeResult {
+        scans_merged,
+        files_merged,
+    })
 }
 
 #[tauri::command]

@@ -104,6 +104,45 @@ export async function trashFile(path) {
   }
 }
 
+export async function addPathToScan(dbPath, newPath) {
+  appState.scanning = true;
+  appState.view = "scanning";
+  appState.progress = { phase: "walking", files_walked: 0, files_to_hash: 0, files_hashed: 0, bytes_hashed: 0 };
+  notify();
+
+  await listen("scan-progress", (event) => {
+    appState.progress = event.payload;
+    notify();
+  });
+
+  await listen("scan-complete", async (event) => {
+    appState.scanning = false;
+    appState.progress = null;
+    appState.stats = event.payload.stats;
+    if (!event.payload.aborted) {
+      await loadDuplicates();
+      appState.view = "results";
+    } else {
+      appState.view = "home";
+    }
+    notify();
+  });
+
+  await invoke("add_path_to_scan", { dbPath, newPath });
+}
+
+export async function mergeDatabases(sourceDbPath) {
+  try {
+    const result = await invoke("merge_databases", { sourceDbPath });
+    await loadDuplicates();
+    notify();
+    return result;
+  } catch (err) {
+    console.error("Failed to merge databases:", err);
+    throw err;
+  }
+}
+
 export async function listScans() {
   return await invoke("list_scans");
 }

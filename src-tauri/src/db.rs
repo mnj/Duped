@@ -324,4 +324,64 @@ impl Database {
 
         Ok(groups)
     }
+
+    pub fn get_all_scans(&self) -> Result<Vec<ScanInfo>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, started_at, completed_at, status FROM scans ORDER BY id",
+        )?;
+
+        let scans: Vec<ScanInfo> = stmt
+            .query_map([], |row| {
+                Ok(ScanInfo {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    started_at: row.get(2)?,
+                    completed_at: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(scans)
+    }
+
+    pub fn get_files_for_scan(&self, scan_id: i64) -> Result<Vec<FileRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, hash, size, modified FROM files WHERE scan_id = ?1 ORDER BY path",
+        )?;
+
+        let files: Vec<FileRecord> = stmt
+            .query_map(params![scan_id], |row| {
+                Ok(FileRecord {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    hash: row.get(2)?,
+                    size: row.get(3)?,
+                    modified: row.get(4)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(files)
+    }
+
+    pub fn insert_file(
+        &self,
+        scan_id: i64,
+        path: &str,
+        hash: Option<&str>,
+        size: i64,
+        modified: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO files (scan_id, path, hash, size, modified) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![scan_id, path, hash, size, modified],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
 }

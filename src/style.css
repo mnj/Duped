@@ -206,7 +206,7 @@ code {
   max-width: 200px;
 }
 
-.scan-item .delete-btn {
+.scan-item .action-btn {
   display: none;
   align-items: center;
   justify-content: center;
@@ -221,8 +221,18 @@ code {
   flex-shrink: 0;
 }
 
-.scan-item:hover .delete-btn {
+.scan-item:hover .action-btn {
   display: flex;
+}
+
+.scan-item .add-btn:hover {
+  background: var(--bg2);
+  color: var(--green);
+}
+
+.scan-item .merge-btn:hover {
+  background: var(--bg2);
+  color: var(--blue);
 }
 
 .scan-item .delete-btn:hover {
