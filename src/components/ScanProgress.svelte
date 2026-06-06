@@ -10,7 +10,8 @@
   let progress = $derived(state.progress);
   let isHashingPhase = $derived(progress?.phase === "hashing");
   let isPhotoHashingPhase = $derived(progress?.phase === "phashing");
-  let showsHashProgress = $derived(isHashingPhase || isPhotoHashingPhase);
+  let isOptimizingPhase = $derived(progress?.phase === "optimizing");
+  let showsHashProgress = $derived(isHashingPhase || isPhotoHashingPhase || isOptimizingPhase);
 
   let hashPercent = $derived(
     progress && progress.files_to_hash > 0
@@ -35,6 +36,8 @@
         Hashing duplicate candidates...
       {:else if isPhotoHashingPhase}
         Analyzing photos with perceptual hashing...
+      {:else if isOptimizingPhase}
+        Building duplicate match indexes...
       {:else}
         Processing files...
       {/if}
@@ -60,7 +63,9 @@
     {#if showsHashProgress}
       <div class="stat">
         <span class="value">{formatNumber(progress.files_hashed)} / {formatNumber(progress.files_to_hash)}</span>
-        <span class="label">{isPhotoHashingPhase ? "Photos Analyzed" : "Files Hashed"}</span>
+        <span class="label">
+          {isOptimizingPhase ? "Steps Completed" : isPhotoHashingPhase ? "Photos Analyzed" : "Files Hashed"}
+        </span>
       </div>
       {#if isHashingPhase}
         <div class="stat">
@@ -93,6 +98,19 @@
       </svg>
       <span>
         Duplicate file hashing is complete. Now analyzing image and photo files with perceptual hashes to find visually similar matches.
+      </span>
+    </div>
+  {/if}
+
+  {#if isOptimizingPhase}
+    <div class="info-note">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="16" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
+      <span>
+        Finalizing duplicate matching groups for exact matches and photo similarity tiers before the scan database is saved.
       </span>
     </div>
   {/if}

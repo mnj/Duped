@@ -1,15 +1,27 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { convertFileSrc } from "@tauri-apps/api/core";
   import { formatBytes, trashFile } from "../../stores.js";
 
+  const similarityOptions = [95, 90, 85];
   let photoGroups = $state([]);
-  let minSimilarity = $state(80);
+  let minSimilarity = $state(90);
   let currentIndex = $state(0);
   let loading = $state(true);
   let loadedImages = $state({});
+  let imageUrls = $state({});
+  let imageLoadGeneration = 0;
+
+  function revokeImageUrls() {
+    for (const url of Object.values(imageUrls)) {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    }
+    imageUrls = {};
+  }
 
   function resetLoadedImages() {
+    revokeImageUrls();
     loadedImages = {};
   }
 
@@ -35,6 +47,40 @@
   });
 
   let currentGroup = $derived(photoGroups[currentIndex] || null);
+
+  $effect(() => {
+    const group = currentGroup;
+    const generation = ++imageLoadGeneration;
+
+    resetLoadedImages();
+
+    if (!group) {
+      return;
+    }
+
+    Promise.all(group.files.map(async (file) => {
+      try {
+        const preview = await invoke("load_image_preview", { path: file.path });
+        if (generation !== imageLoadGeneration) {
+          return;
+        }
+        const bytes = new Uint8Array(preview.bytes);
+        const blob = new Blob([bytes], { type: preview.mime_type });
+        const url = URL.createObjectURL(blob);
+        imageUrls = { ...imageUrls, [file.path]: url };
+      } catch (err) {
+        console.error("Failed to load image preview:", err);
+        if (generation === imageLoadGeneration) {
+          loadedImages = { ...loadedImages, [file.path]: false };
+        }
+      }
+    }));
+
+    return () => {
+      imageLoadGeneration++;
+      revokeImageUrls();
+    };
+  });
 
   function prev() {
     if (currentIndex > 0) currentIndex--;
@@ -78,15 +124,12 @@
 <div class="photo-view">
   <div class="photo-toolbar">
     <div class="photo-filter">
-      <label for="sim-slider">Similarity: {minSimilarity}%</label>
-      <input
-        id="sim-slider"
-        type="range"
-        min="50"
-        max="100"
-        bind:value={minSimilarity}
-        onchange={reloadWithThreshold}
-      />
+      <label for="sim-select">Similarity: {minSimilarity}%</label>
+      <select id="sim-select" bind:value={minSimilarity} onchange={reloadWithThreshold}>
+        {#each similarityOptions as option}
+          <option value={option}>{option}%</option>
+        {/each}
+      </select>
     </div>
 
     {#if photoGroups.length > 0}
@@ -137,7 +180,7 @@
             <div class="photo-label">File {i + 1}</div>
             <div class="photo-img-wrapper">
               <img
-                src={convertFileSrc(file.path)}
+                src={imageUrls[file.path]}
                 alt={fileName(file.path)}
                 class="photo-img"
                 class:loaded={loadedImages[file.path] === true}

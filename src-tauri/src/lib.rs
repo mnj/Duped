@@ -29,6 +29,7 @@ pub fn run(use_tmp_db: bool) {
             commands::add_path_to_scan,
             commands::merge_databases,
             commands::get_photo_groups,
+            commands::load_image_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

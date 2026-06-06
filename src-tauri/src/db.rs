@@ -75,6 +75,44 @@ impl Database {
                 FOREIGN KEY (scan_id) REFERENCES scans(id)
             );
 
+            CREATE TABLE IF NOT EXISTS duplicate_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id INTEGER NOT NULL,
+                hash TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                file_count INTEGER NOT NULL,
+                wasted_space INTEGER NOT NULL,
+                FOREIGN KEY (scan_id) REFERENCES scans(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS duplicate_group_files (
+                group_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                PRIMARY KEY (group_id, file_id),
+                FOREIGN KEY (group_id) REFERENCES duplicate_groups(id),
+                FOREIGN KEY (file_id) REFERENCES files(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS photo_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id INTEGER NOT NULL,
+                threshold INTEGER NOT NULL,
+                file_count INTEGER NOT NULL,
+                min_similarity REAL NOT NULL,
+                avg_similarity REAL NOT NULL,
+                FOREIGN KEY (scan_id) REFERENCES scans(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS photo_group_files (
+                group_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                PRIMARY KEY (group_id, file_id),
+                FOREIGN KEY (group_id) REFERENCES photo_groups(id),
+                FOREIGN KEY (file_id) REFERENCES files(id)
+            );
+
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             ",
@@ -89,6 +127,10 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_files_scan_size ON files(scan_id, size);
             CREATE INDEX IF NOT EXISTS idx_files_scan_hash ON files(scan_id, hash);
             CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+            CREATE INDEX IF NOT EXISTS idx_duplicate_groups_scan_size ON duplicate_groups(scan_id, size DESC);
+            CREATE INDEX IF NOT EXISTS idx_duplicate_group_files_group ON duplicate_group_files(group_id, ordinal);
+            CREATE INDEX IF NOT EXISTS idx_photo_groups_scan_threshold ON photo_groups(scan_id, threshold, file_count DESC);
+            CREATE INDEX IF NOT EXISTS idx_photo_group_files_group ON photo_group_files(group_id, ordinal);
             ",
         )?;
         Ok(())
@@ -184,30 +226,31 @@ impl Database {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
-            "SELECT hash, size FROM files
-             WHERE scan_id = ?1 AND hash IS NOT NULL
-             GROUP BY hash HAVING COUNT(*) > 1
-             ORDER BY size DESC
+            "SELECT id, hash, size FROM duplicate_groups
+             WHERE scan_id = ?1
+             ORDER BY size DESC, file_count DESC, hash ASC
              LIMIT ?2 OFFSET ?3",
         )?;
 
-        let groups: Vec<(String, i64)> = stmt
+        let groups: Vec<(i64, String, i64)> = stmt
             .query_map(params![scan_id, limit, offset], |row| {
-                Ok((row.get(0)?, row.get(1)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })?
             .filter_map(|r| r.ok())
             .collect();
 
         let mut result = Vec::new();
-        for (hash, size) in groups {
+        for (group_id, hash, size) in groups {
             let mut file_stmt = conn.prepare(
-                "SELECT id, path, hash, size, modified, phash FROM files
-                 WHERE scan_id = ?1 AND hash = ?2
-                 ORDER BY path",
+                "SELECT f.id, f.path, f.hash, f.size, f.modified, f.phash
+                 FROM duplicate_group_files dgf
+                 JOIN files f ON f.id = dgf.file_id
+                 WHERE dgf.group_id = ?1
+                 ORDER BY dgf.ordinal ASC, f.path ASC",
             )?;
 
             let files: Vec<FileRecord> = file_stmt
-                .query_map(params![scan_id, hash], |row| {
+                .query_map(params![group_id], |row| {
                     Ok(FileRecord {
                         id: row.get(0)?,
                         path: row.get(1)?,
@@ -229,11 +272,7 @@ impl Database {
     pub fn get_duplicate_group_count(&self, scan_id: i64) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT COUNT(*) FROM (
-                SELECT hash FROM files
-                WHERE scan_id = ?1 AND hash IS NOT NULL
-                GROUP BY hash HAVING COUNT(*) > 1
-            )",
+            "SELECT COUNT(*) FROM duplicate_groups WHERE scan_id = ?1",
             params![scan_id],
             |row| row.get(0),
         )
@@ -424,6 +463,105 @@ impl Database {
         min_similarity: f64,
     ) -> Result<Vec<Vec<FileRecord>>> {
         let conn = self.conn.lock().unwrap();
+        let threshold = nearest_photo_threshold(min_similarity);
+        let mut stmt = conn.prepare(
+            "SELECT id FROM photo_groups
+             WHERE scan_id = ?1 AND threshold = ?2
+             ORDER BY file_count DESC, avg_similarity DESC, id ASC",
+        )?;
+
+        let group_ids: Vec<i64> = stmt
+            .query_map(params![scan_id, threshold], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut groups = Vec::new();
+        for group_id in group_ids {
+            let mut file_stmt = conn.prepare(
+                "SELECT f.id, f.path, f.hash, f.size, f.modified, f.phash
+                 FROM photo_group_files pgf
+                 JOIN files f ON f.id = pgf.file_id
+                 WHERE pgf.group_id = ?1
+                 ORDER BY pgf.ordinal ASC, f.path ASC",
+            )?;
+
+            let files: Vec<FileRecord> = file_stmt
+                .query_map(params![group_id], |row| {
+                    Ok(FileRecord {
+                        id: row.get(0)?,
+                        path: row.get(1)?,
+                        hash: row.get(2)?,
+                        size: row.get(3)?,
+                        modified: row.get(4)?,
+                        phash: row.get(5)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            groups.push(files);
+        }
+
+        Ok(groups)
+    }
+
+    pub fn rebuild_duplicate_groups(&self, scan_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM duplicate_group_files WHERE group_id IN (SELECT id FROM duplicate_groups WHERE scan_id = ?1)", params![scan_id])?;
+        conn.execute("DELETE FROM duplicate_groups WHERE scan_id = ?1", params![scan_id])?;
+
+        let mut group_stmt = conn.prepare(
+            "SELECT hash, MIN(size) as size, COUNT(*) as file_count
+             FROM files
+             WHERE scan_id = ?1 AND hash IS NOT NULL
+             GROUP BY hash
+             HAVING COUNT(*) > 1
+             ORDER BY size DESC, hash ASC",
+        )?;
+
+        let groups: Vec<(String, i64, i64)> = group_stmt
+            .query_map(params![scan_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut insert_group = conn.prepare_cached(
+            "INSERT INTO duplicate_groups (scan_id, hash, size, file_count, wasted_space)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        let mut insert_member = conn.prepare_cached(
+            "INSERT INTO duplicate_group_files (group_id, file_id, ordinal)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        let mut files_stmt = conn.prepare(
+            "SELECT id FROM files WHERE scan_id = ?1 AND hash = ?2 ORDER BY path ASC",
+        )?;
+
+        for (hash, size, file_count) in groups {
+            insert_group.execute(params![scan_id, hash, size, file_count, size * (file_count - 1)])?;
+            let group_id = conn.last_insert_rowid();
+            let file_ids: Vec<i64> = files_stmt
+                .query_map(params![scan_id, hash], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (ordinal, file_id) in file_ids.iter().enumerate() {
+                insert_member.execute(params![group_id, file_id, ordinal as i64])?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn rebuild_photo_groups(&self, scan_id: i64, threshold: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM photo_group_files WHERE group_id IN (SELECT id FROM photo_groups WHERE scan_id = ?1 AND threshold = ?2)",
+            params![scan_id, threshold],
+        )?;
+        conn.execute(
+            "DELETE FROM photo_groups WHERE scan_id = ?1 AND threshold = ?2",
+            params![scan_id, threshold],
+        )?;
+
         let mut stmt = conn.prepare(
             "SELECT id, path, hash, size, modified, phash FROM files
              WHERE scan_id = ?1 AND phash IS NOT NULL
@@ -444,63 +582,146 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
 
-        let n = files.len();
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut rank = vec![0usize; n];
+        let groups = build_photo_groups_for_threshold(&files, threshold as f64)?;
 
-        fn find(parent: &mut [usize], x: usize) -> usize {
-            if parent[x] != x {
-                parent[x] = find(parent, parent[x]);
+        let mut insert_group = conn.prepare_cached(
+            "INSERT INTO photo_groups (scan_id, threshold, file_count, min_similarity, avg_similarity)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        let mut insert_member = conn.prepare_cached(
+            "INSERT INTO photo_group_files (group_id, file_id, ordinal)
+             VALUES (?1, ?2, ?3)",
+        )?;
+
+        for group in groups {
+            insert_group.execute(params![
+                scan_id,
+                threshold,
+                group.files.len() as i64,
+                group.min_similarity,
+                group.avg_similarity
+            ])?;
+            let group_id = conn.last_insert_rowid();
+            for (ordinal, file) in group.files.iter().enumerate() {
+                insert_member.execute(params![group_id, file.id, ordinal as i64])?;
             }
-            parent[x]
         }
 
-        fn union(parent: &mut [usize], rank: &mut [usize], x: usize, y: usize) {
-            let rx = find(parent, x);
-            let ry = find(parent, y);
-            if rx != ry {
-                if rank[rx] < rank[ry] {
-                    parent[rx] = ry;
-                } else if rank[rx] > rank[ry] {
-                    parent[ry] = rx;
-                } else {
-                    parent[ry] = rx;
-                    rank[rx] += 1;
-                }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MaterializedPhotoGroup {
+    files: Vec<FileRecord>,
+    min_similarity: f64,
+    avg_similarity: f64,
+}
+
+fn nearest_photo_threshold(min_similarity: f64) -> i64 {
+    let pct = if min_similarity <= 1.0 {
+        (min_similarity * 100.0).round() as i64
+    } else {
+        min_similarity.round() as i64
+    };
+
+    match pct {
+        x if x >= 95 => 95,
+        x if x >= 90 => 90,
+        _ => 85,
+    }
+}
+
+fn build_photo_groups_for_threshold(
+    files: &[FileRecord],
+    threshold: f64,
+) -> Result<Vec<MaterializedPhotoGroup>> {
+    let n = files.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut rank = vec![0usize; n];
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            parent[x] = find(parent, parent[x]);
+        }
+        parent[x]
+    }
+
+    fn union(parent: &mut [usize], rank: &mut [usize], x: usize, y: usize) {
+        let rx = find(parent, x);
+        let ry = find(parent, y);
+        if rx != ry {
+            if rank[rx] < rank[ry] {
+                parent[rx] = ry;
+            } else if rank[rx] > rank[ry] {
+                parent[ry] = rx;
+            } else {
+                parent[ry] = rx;
+                rank[rx] += 1;
             }
         }
+    }
 
-        for i in 0..n {
-            if let Some(phash_a) = files[i].phash {
-                for j in (i + 1)..n {
-                    if let Some(phash_b) = files[j].phash {
-                        let sim = crate::phasher::similarity_pct(phash_a, phash_b);
-                        if sim >= min_similarity {
-                            union(&mut parent, &mut rank, i, j);
-                        }
+    for i in 0..n {
+        if let Some(phash_a) = files[i].phash {
+            for j in (i + 1)..n {
+                if let Some(phash_b) = files[j].phash {
+                    let sim = crate::phasher::similarity_pct(phash_a, phash_b);
+                    if sim >= threshold {
+                        union(&mut parent, &mut rank, i, j);
                     }
                 }
             }
         }
-
-        let mut groups_map: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
-        for i in 0..n {
-            let root = find(&mut parent, i);
-            groups_map.entry(root).or_default().push(i);
-        }
-
-        let mut groups: Vec<Vec<FileRecord>> = groups_map
-            .into_values()
-            .filter(|indices| indices.len() > 1)
-            .map(|indices| {
-                let mut group: Vec<FileRecord> = indices.into_iter().map(|i| files[i].clone()).collect();
-                group.sort_by_key(|f| f.path.clone());
-                group
-            })
-            .collect();
-
-        groups.sort_by_key(|g| -(g.len() as i64));
-
-        Ok(groups)
     }
+
+    let mut groups_map: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        groups_map.entry(root).or_default().push(i);
+    }
+
+    let mut groups: Vec<MaterializedPhotoGroup> = groups_map
+        .into_values()
+        .filter(|indices| indices.len() > 1)
+        .map(|indices| {
+            let mut group_files: Vec<FileRecord> = indices.into_iter().map(|i| files[i].clone()).collect();
+            group_files.sort_by_key(|f| f.path.clone());
+
+            let m = group_files.len();
+            let mut min_sim = 100.0f64;
+            let mut total_sim = 0.0f64;
+            let mut count = 0i64;
+
+            for i in 0..m {
+                if let Some(hash_a) = group_files[i].phash {
+                    for j in (i + 1)..m {
+                        if let Some(hash_b) = group_files[j].phash {
+                            let sim = crate::phasher::similarity_pct(hash_a, hash_b);
+                            if sim < min_sim {
+                                min_sim = sim;
+                            }
+                            total_sim += sim;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+
+            MaterializedPhotoGroup {
+                files: group_files,
+                min_similarity: min_sim,
+                avg_similarity: if count > 0 { total_sim / count as f64 } else { 0.0 },
+            }
+        })
+        .collect();
+
+    groups.sort_by(|a, b| {
+        b.files
+            .len()
+            .cmp(&a.files.len())
+            .then_with(|| b.avg_similarity.partial_cmp(&a.avg_similarity).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    Ok(groups)
 }

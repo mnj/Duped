@@ -1,6 +1,7 @@
 use crate::db::{Database, DuplicateGroup, FileRecord, ScanInfo, Stats};
-use crate::scanner::{hash_candidates, phash_images, walk_and_collect, ScanProgress};
+use crate::scanner::{hash_candidates, optimize_matching_groups, phash_images, walk_and_collect, ScanProgress};
 use serde::Serialize;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,6 +33,12 @@ pub struct PhotoGroup {
     pub files: Vec<FileRecord>,
     pub min_similarity: f64,
     pub avg_similarity: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImagePreview {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
 }
 
 pub struct AppState {
@@ -161,11 +168,15 @@ pub async fn start_scan(
             let _ = phash_images(&db, scan_id, &progress);
         }
 
+        if !progress.is_aborted() {
+            let _ = optimize_matching_groups(&db, scan_id, &progress);
+        }
+
         if progress.is_aborted() {
             let _ = db.abort_scan(scan_id);
         } else {
-            let _ = db.complete_scan(scan_id);
             let _ = db.create_indexes();
+            let _ = db.complete_scan(scan_id);
         }
 
         progress.complete();
@@ -401,6 +412,29 @@ pub fn trash_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn load_image_preview(path: String) -> Result<ImagePreview, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read image: {}", e))?;
+    let mime_type = match PathBuf::from(&path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("avif") => "image/avif",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+
+    Ok(ImagePreview { bytes, mime_type })
+}
+
+#[tauri::command]
 pub fn get_photo_groups(
     state: tauri::State<'_, AppState>,
     min_similarity: f64,
@@ -522,11 +556,15 @@ pub async fn add_path_to_scan(
             let _ = phash_images(&db, scan_id, &progress);
         }
 
+        if !progress.is_aborted() {
+            let _ = optimize_matching_groups(&db, scan_id, &progress);
+        }
+
         if progress.is_aborted() {
             let _ = db.abort_scan(scan_id);
         } else {
-            let _ = db.complete_scan(scan_id);
             let _ = db.create_indexes();
+            let _ = db.complete_scan(scan_id);
         }
 
         progress.complete();

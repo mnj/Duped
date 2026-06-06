@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub const PHASE_WALKING: u8 = 0;
 pub const PHASE_HASHING: u8 = 1;
 pub const PHASE_PHASHING: u8 = 2;
+pub const PHASE_OPTIMIZING: u8 = 3;
 
 pub struct ScanProgress {
     pub files_walked: AtomicU64,
@@ -59,6 +60,7 @@ impl ScanProgress {
         match self.phase.load(Ordering::SeqCst) as u8 {
             PHASE_HASHING => "hashing",
             PHASE_PHASHING => "phashing",
+            PHASE_OPTIMIZING => "optimizing",
             _ => "walking",
         }
     }
@@ -243,6 +245,33 @@ pub fn phash_images(
     for (path, h) in results {
         if let Some(phash) = h {
             let _ = db.update_file_phash(&path, phash);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn optimize_matching_groups(
+    db: &Database,
+    scan_id: i64,
+    progress: &ScanProgress,
+) -> Result<(), Box<dyn Error>> {
+    progress.set_phase(PHASE_OPTIMIZING);
+    progress.files_to_hash.store(4, Ordering::Relaxed);
+    progress.files_hashed.store(0, Ordering::Relaxed);
+    progress.bytes_hashed.store(0, Ordering::Relaxed);
+
+    db.rebuild_duplicate_groups(scan_id)?;
+    progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+    if progress.is_aborted() {
+        return Ok(());
+    }
+
+    for threshold in [95_i64, 90_i64, 85_i64] {
+        db.rebuild_photo_groups(scan_id, threshold)?;
+        progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+        if progress.is_aborted() {
+            break;
         }
     }
 
