@@ -25,10 +25,15 @@ bun run tauri:build
 
 # Build only the AppImage
 bun run tauri:build:appimage
+
+# Build only the release binary in a Debian Trixie container
+bun run tauri:build:release:trixie
 ```
 
 On Linux, use `bun run tauri:build` or `bun run tauri:build:appimage` instead of `bun tauri build`.
 These scripts set `NO_STRIP=1`, which avoids a `linuxdeploy` failure when stripping newer Arch/CachyOS system libraries during AppImage packaging.
+The Debian Trixie container build uses Podman, mounts the repo read-only into the container, builds from a temporary in-container working copy, and stops at `tauri build --no-bundle`, so it compiles the optimized release app without producing platform bundles.
+The compiled binary is copied to `output/trixie-release/` on the host after the container build completes.
 
 ## Usage
 
@@ -38,8 +43,8 @@ These scripts set `NO_STRIP=1`, which avoids a `linuxdeploy` failure when stripp
 bun tauri dev
 ```
 
-On Linux, scans use `/tmp` by default while building results, then move the finished database into the app data directory.
-On other platforms, the database is stored directly in the app data directory (`~/.local/share/com.duped/`) unless temporary storage is explicitly enabled.
+On Linux, scans use `/tmp` by default while building results, then move the finished database into the app's current working directory.
+On other platforms, the database is stored directly in the app's current working directory unless temporary storage is explicitly enabled.
 
 ### Temporary Storage Mode
 
@@ -61,7 +66,7 @@ DUPED_NO_TMP_DB=1 ./src-tauri/target/release/duped
 When temporary storage mode is enabled:
 - The SQLite database is created in `/tmp` during scanning
 - This reduces disk writes on your main storage
-- After scanning completes, the database is automatically moved to the app data directory
+- After scanning completes, the database is automatically moved to the app's current working directory
 - The UI will show a notification that temporary storage mode is active
 
 This is particularly useful when:
@@ -72,6 +77,7 @@ This is particularly useful when:
 Linux note:
 - This project now defaults to `/tmp` on Linux because it is commonly backed by `tmpfs`
 - macOS and other platforms do not assume the same memory-backed behavior by default
+- If the app is launched without a usable working directory, it falls back to the platform app-data directory
 
 ## Architecture
 

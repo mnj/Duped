@@ -32,6 +32,7 @@ pub fn run(use_tmp_db: bool) {
             commands::get_photo_groups_page,
             commands::get_photo_group,
             commands::load_image_preview,
+            commands::load_file_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

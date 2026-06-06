@@ -11,6 +11,7 @@
   let loading = $state(true);
   let loadedImages = $state({});
   let imageUrls = $state({});
+  let fileMetadata = $state({});
   let imageLoadGeneration = 0;
 
   function revokeImageUrls() {
@@ -25,6 +26,7 @@
   function resetLoadedImages() {
     revokeImageUrls();
     loadedImages = {};
+    fileMetadata = {};
   }
 
   async function loadImagesForGroup(group) {
@@ -38,6 +40,7 @@
     await Promise.all(group.files.map(async (file) => {
       try {
         const preview = await invoke("load_image_preview", { path: file.path });
+        const metadata = await invoke("load_file_metadata", { path: file.path });
         if (generation !== imageLoadGeneration) {
           return;
         }
@@ -45,6 +48,7 @@
         const blob = new Blob([bytes], { type: preview.mime_type });
         const url = URL.createObjectURL(blob);
         imageUrls = { ...imageUrls, [file.path]: url };
+        fileMetadata = { ...fileMetadata, [file.path]: metadata };
       } catch (err) {
         console.error("Failed to load image preview:", err);
         if (generation === imageLoadGeneration) {
@@ -129,6 +133,14 @@
     loadedImages = { ...loadedImages, [path]: false };
   }
 
+  function formatDuration(seconds) {
+    if (!seconds || Number.isNaN(seconds)) return null;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}m ${secs}s`;
+  }
+
   function symlinkTarget(path) {
     return currentGroup?.files.find((file) => file.path !== path)?.path ?? null;
   }
@@ -200,7 +212,7 @@
         <div class="photo-sim">
           <span class="photo-group-size">{currentGroup.files.length} similar images</span>
           {#if currentGroup.avg_similarity >= 95}
-            <span class="badge green">Exact match</span>
+            <span class="badge green">Visual match</span>
           {:else if currentGroup.avg_similarity >= 80}
             <span class="badge amber">Near match</span>
           {:else}
@@ -242,6 +254,15 @@
               <span class="photo-name">{fileName(file.path)}</span>
               <span class="photo-dir">{fileDir(file.path)}</span>
               <span class="photo-size">{formatBytes(file.size)}</span>
+              {#if fileMetadata[file.path]?.width && fileMetadata[file.path]?.height}
+                <span class="photo-size">{fileMetadata[file.path].width}x{fileMetadata[file.path].height}</span>
+              {/if}
+              {#if fileMetadata[file.path]?.duration_seconds}
+                <span class="photo-size">{formatDuration(fileMetadata[file.path].duration_seconds)}</span>
+              {/if}
+              {#if fileMetadata[file.path]?.codec}
+                <span class="photo-size">{fileMetadata[file.path].codec}</span>
+              {/if}
             </div>
             <button class="photo-trash" onclick={() => handleTrash(file.path)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

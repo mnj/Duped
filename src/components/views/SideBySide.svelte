@@ -1,10 +1,50 @@
 <script>
+  import { invoke } from "@tauri-apps/api/core";
   import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
+  import { onMount } from "svelte";
 
   let { groups = [] } = $props();
 
   let currentIndex = $state(0);
   let currentGroup = $derived(groups[currentIndex] || null);
+  let fileMetadata = $state({});
+
+  async function loadMetadata(group) {
+    if (!group) {
+      fileMetadata = {};
+      return;
+    }
+
+    const entries = await Promise.all(
+      group.files.slice(0, 2).map(async (file) => {
+        try {
+          const metadata = await invoke("load_file_metadata", { path: file.path });
+          return [file.path, metadata];
+        } catch (err) {
+          console.error("Failed to load file metadata:", err);
+          return [file.path, null];
+        }
+      }),
+    );
+
+    fileMetadata = Object.fromEntries(entries);
+  }
+
+  function formatDuration(seconds) {
+    if (!seconds || Number.isNaN(seconds)) return null;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}m ${secs}s`;
+  }
+
+  onMount(() => {
+    loadMetadata(currentGroup);
+  });
+
+  $effect(() => {
+    loadMetadata(currentGroup);
+  });
 
   function prev() {
     if (currentIndex > 0) currentIndex--;
@@ -78,6 +118,15 @@
             <span class="sbs-file-name">{fileName(file.path)}</span>
             <span class="sbs-file-dir">{fileDir(file.path)}</span>
             <span class="sbs-file-size">{formatBytes(file.size)}</span>
+            {#if fileMetadata[file.path]?.width && fileMetadata[file.path]?.height}
+              <span class="sbs-file-size">{fileMetadata[file.path].width}x{fileMetadata[file.path].height}</span>
+            {/if}
+            {#if fileMetadata[file.path]?.duration_seconds}
+              <span class="sbs-file-size">{formatDuration(fileMetadata[file.path].duration_seconds)}</span>
+            {/if}
+            {#if fileMetadata[file.path]?.codec}
+              <span class="sbs-file-size">{fileMetadata[file.path].codec}</span>
+            {/if}
           </div>
           <div class="sbs-actions">
             <button class="sbs-keep" onclick={() => handleTrash(currentGroup.files[i === 0 ? 1 : 0].path)}>

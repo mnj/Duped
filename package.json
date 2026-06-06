@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:build:appimage": "NO_STRIP=1 tauri build --bundles appimage",
-    "tauri:build": "NO_STRIP=1 tauri build"
+    "tauri:build": "NO_STRIP=1 tauri build",
+    "tauri:build:release:trixie": "bash ./scripts/build-release-trixie.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

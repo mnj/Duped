@@ -3,6 +3,7 @@ use crate::scanner::{hash_candidates, optimize_matching_groups, phash_images, wa
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -48,6 +49,15 @@ pub struct ImagePreview {
     pub mime_type: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMetadata {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_seconds: Option<f64>,
+    pub codec: Option<String>,
+    pub format_name: Option<String>,
+}
+
 pub struct AppState {
     pub db: Mutex<Option<Arc<Database>>>,
     pub scan_id: Mutex<Option<i64>>,
@@ -91,12 +101,19 @@ fn get_scan_id(state: &AppState) -> Result<i64, String> {
         .ok_or_else(|| "No active scan".to_string())
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(dir) = std::env::current_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+
     let dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
+        .map_err(|e| format!("Failed to get fallback app data dir: {}", e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create fallback app data dir: {}", e))?;
     Ok(dir)
 }
 
@@ -106,7 +123,7 @@ fn scan_db_path(app: &AppHandle, use_tmp: bool) -> Result<PathBuf, String> {
         let filename = format!("duped_scan_{}.db", timestamp);
         Ok(std::env::temp_dir().join(filename))
     } else {
-        let dir = app_data_dir(app)?;
+        let dir = storage_dir(app)?;
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("scan_{}.db", timestamp);
         Ok(dir.join(filename))
@@ -114,7 +131,7 @@ fn scan_db_path(app: &AppHandle, use_tmp: bool) -> Result<PathBuf, String> {
 }
 
 fn move_db_from_tmp(tmp_path: &PathBuf, app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app_data_dir(app)?;
+    let dir = storage_dir(app)?;
     let filename = tmp_path.file_name().ok_or("Invalid temp path")?;
     let final_path = dir.join(filename);
     std::fs::copy(tmp_path, &final_path)
@@ -347,7 +364,7 @@ pub fn get_stats(state: tauri::State<'_, AppState>) -> Result<Stats, String> {
 
 #[tauri::command]
 pub fn list_scans(app: AppHandle) -> Result<Vec<PathBuf>, String> {
-    let dir = app_data_dir(&app)?;
+    let dir = storage_dir(&app)?;
     let dismissed = get_dismissed_scans(&dir)?;
     
     let mut scans = Vec::new();
@@ -405,7 +422,7 @@ pub fn finalize_scan(
 
 #[tauri::command]
 pub fn dismiss_scan(app: AppHandle, path: String) -> Result<(), String> {
-    let dir = app_data_dir(&app)?;
+    let dir = storage_dir(&app)?;
     let mut dismissed = get_dismissed_scans(&dir)?;
     let path_buf = PathBuf::from(&path);
     if !dismissed.contains(&path_buf) {
@@ -471,6 +488,94 @@ pub fn load_image_preview(path: String) -> Result<ImagePreview, String> {
     .to_string();
 
     Ok(ImagePreview { bytes, mime_type })
+}
+
+#[tauri::command]
+pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
+    let path_buf = PathBuf::from(&path);
+
+    let mut metadata = FileMetadata {
+        width: None,
+        height: None,
+        duration_seconds: None,
+        codec: None,
+        format_name: None,
+    };
+
+    if let Ok((width, height)) = image::image_dimensions(&path_buf) {
+        metadata.width = Some(width);
+        metadata.height = Some(height);
+    }
+
+    let ffprobe_output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            &path,
+        ])
+        .output();
+
+    let Ok(output) = ffprobe_output else {
+        return Ok(metadata);
+    };
+
+    if !output.status.success() {
+        return Ok(metadata);
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse ffprobe output: {}", e))?;
+
+    if let Some(format) = value.get("format") {
+        if metadata.duration_seconds.is_none() {
+            metadata.duration_seconds = format
+                .get("duration")
+                .and_then(|d| d.as_str())
+                .and_then(|d| d.parse::<f64>().ok());
+        }
+        metadata.format_name = format
+            .get("format_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+
+    if let Some(streams) = value.get("streams").and_then(|s| s.as_array()) {
+        if let Some(stream) = streams.iter().find(|stream| {
+            matches!(
+                stream.get("codec_type").and_then(|v| v.as_str()),
+                Some("video") | Some("audio")
+            )
+        }) {
+            if metadata.width.is_none() {
+                metadata.width = stream
+                    .get("width")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok());
+            }
+            if metadata.height.is_none() {
+                metadata.height = stream
+                    .get("height")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok());
+            }
+            if metadata.duration_seconds.is_none() {
+                metadata.duration_seconds = stream
+                    .get("duration")
+                    .and_then(|d| d.as_str())
+                    .and_then(|d| d.parse::<f64>().ok());
+            }
+            metadata.codec = stream
+                .get("codec_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+
+    Ok(metadata)
 }
 
 fn to_photo_groups(groups: Vec<MaterializedPhotoGroupRecord>) -> Vec<PhotoGroup> {
