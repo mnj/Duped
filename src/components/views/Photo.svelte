@@ -3,9 +3,10 @@
   import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
 
   const similarityOptions = [95, 90, 85];
-  let photoGroups = $state([]);
   let minSimilarity = $state(90);
   let currentIndex = $state(0);
+  let totalGroups = $state(0);
+  let currentGroup = $state(null);
   let loading = $state(true);
   let loadedImages = $state({});
   let imageUrls = $state({});
@@ -29,24 +30,29 @@
     loading = true;
     resetLoadedImages();
     try {
-      photoGroups = await invoke("get_photo_groups", { minSimilarity: minSimilarity / 100.0 });
+      const page = await invoke("get_photo_groups_page", {
+        minSimilarity: minSimilarity / 100.0,
+        offset: 0,
+        limit: 1,
+      });
+      totalGroups = page.total;
+      currentGroup = page.groups[0] || null;
+      currentIndex = 0;
     } catch (err) {
       console.error("Failed to load photos:", err);
-      photoGroups = [];
+      totalGroups = 0;
+      currentGroup = null;
     }
     loading = false;
   }
 
   async function reloadWithThreshold() {
-    currentIndex = 0;
     await loadPhotos();
   }
 
   $effect(() => {
     loadPhotos();
   });
-
-  let currentGroup = $derived(photoGroups[currentIndex] || null);
 
   $effect(() => {
     const group = currentGroup;
@@ -82,12 +88,33 @@
     };
   });
 
-  function prev() {
-    if (currentIndex > 0) currentIndex--;
+  async function loadCurrentGroup() {
+    loading = true;
+    resetLoadedImages();
+    try {
+      currentGroup = await invoke("get_photo_group", {
+        minSimilarity: minSimilarity / 100.0,
+        index: currentIndex,
+      });
+    } catch (err) {
+      console.error("Failed to load current photo group:", err);
+      currentGroup = null;
+    }
+    loading = false;
   }
 
-  function next() {
-    if (currentIndex < photoGroups.length - 1) currentIndex++;
+  async function prev() {
+    if (currentIndex > 0) {
+      currentIndex--;
+      await loadCurrentGroup();
+    }
+  }
+
+  async function next() {
+    if (currentIndex < totalGroups - 1) {
+      currentIndex++;
+      await loadCurrentGroup();
+    }
   }
 
   function fileName(path) {
@@ -120,12 +147,18 @@
   async function handleTrash(path) {
     if (confirm(`Move "${fileName(path)}" to trash?`)) {
       await trashFile(path);
-      photoGroups = photoGroups.map(group => ({
-        ...group,
-        files: group.files.filter(f => f.path !== path)
-      })).filter(group => group.files.length > 1);
-      if (currentIndex >= photoGroups.length) {
-        currentIndex = Math.max(0, photoGroups.length - 1);
+      if (currentGroup) {
+        currentGroup = {
+          ...currentGroup,
+          files: currentGroup.files.filter((f) => f.path !== path),
+        };
+      }
+      if (currentGroup && currentGroup.files.length <= 1) {
+        totalGroups = Math.max(0, totalGroups - 1);
+        if (currentIndex >= totalGroups && currentIndex > 0) {
+          currentIndex--;
+        }
+        await loadCurrentGroup();
       }
     }
   }
@@ -142,15 +175,15 @@
       </select>
     </div>
 
-    {#if photoGroups.length > 0}
+    {#if totalGroups > 0}
       <div class="photo-nav">
         <button onclick={prev} disabled={currentIndex === 0} aria-label="Previous group">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 18 9 12 15 6"/>
           </svg>
         </button>
-        <span class="photo-counter">{currentIndex + 1} / {photoGroups.length}</span>
-        <button onclick={next} disabled={currentIndex >= photoGroups.length - 1} aria-label="Next group">
+        <span class="photo-counter">{currentIndex + 1} / {totalGroups}</span>
+        <button onclick={next} disabled={currentIndex >= totalGroups - 1} aria-label="Next group">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"/>
           </svg>

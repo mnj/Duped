@@ -29,7 +29,8 @@ pub fn run(use_tmp_db: bool) {
             commands::replace_with_symlink,
             commands::add_path_to_scan,
             commands::merge_databases,
-            commands::get_photo_groups,
+            commands::get_photo_groups_page,
+            commands::get_photo_group,
             commands::load_image_preview,
         ])
         .run(tauri::generate_context!())

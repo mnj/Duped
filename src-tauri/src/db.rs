@@ -38,6 +38,13 @@ pub struct Stats {
     pub wasted_space: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterializedPhotoGroupRecord {
+    pub files: Vec<FileRecord>,
+    pub min_similarity: f64,
+    pub avg_similarity: f64,
+}
+
 pub struct Database {
     conn: Mutex<Connection>,
 }
@@ -457,26 +464,45 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn get_photo_groups(
+    pub fn get_photo_group_count(
         &self,
         scan_id: i64,
         min_similarity: f64,
-    ) -> Result<Vec<Vec<FileRecord>>> {
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let threshold = nearest_photo_threshold(min_similarity);
+        conn.query_row(
+            "SELECT COUNT(*) FROM photo_groups WHERE scan_id = ?1 AND threshold = ?2",
+            params![scan_id, threshold],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn get_photo_group_page(
+        &self,
+        scan_id: i64,
+        min_similarity: f64,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<MaterializedPhotoGroupRecord>> {
         let conn = self.conn.lock().unwrap();
         let threshold = nearest_photo_threshold(min_similarity);
         let mut stmt = conn.prepare(
-            "SELECT id FROM photo_groups
+            "SELECT id, min_similarity, avg_similarity FROM photo_groups
              WHERE scan_id = ?1 AND threshold = ?2
-             ORDER BY file_count DESC, avg_similarity DESC, id ASC",
+             ORDER BY file_count DESC, avg_similarity DESC, id ASC
+             LIMIT ?3 OFFSET ?4",
         )?;
 
-        let group_ids: Vec<i64> = stmt
-            .query_map(params![scan_id, threshold], |row| row.get(0))?
+        let group_rows: Vec<(i64, f64, f64)> = stmt
+            .query_map(params![scan_id, threshold, limit, offset], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
 
         let mut groups = Vec::new();
-        for group_id in group_ids {
+        for (group_id, min_similarity, avg_similarity) in group_rows {
             let mut file_stmt = conn.prepare(
                 "SELECT f.id, f.path, f.hash, f.size, f.modified, f.phash
                  FROM photo_group_files pgf
@@ -499,15 +525,33 @@ impl Database {
                 .filter_map(|r| r.ok())
                 .collect();
 
-            groups.push(files);
+            groups.push(MaterializedPhotoGroupRecord {
+                files,
+                min_similarity,
+                avg_similarity,
+            });
         }
 
         Ok(groups)
     }
 
-    pub fn rebuild_duplicate_groups<F>(&self, scan_id: i64, is_aborted: F) -> Result<()>
+    pub fn get_exact_duplicate_group_count(&self, scan_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM (
+                SELECT hash FROM files
+                WHERE scan_id = ?1 AND hash IS NOT NULL
+                GROUP BY hash HAVING COUNT(*) > 1
+            )",
+            params![scan_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn rebuild_duplicate_groups<F, G>(&self, scan_id: i64, is_aborted: F, on_group: G) -> Result<()>
     where
         F: Fn() -> bool,
+        G: Fn(),
     {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM duplicate_group_files WHERE group_id IN (SELECT id FROM duplicate_groups WHERE scan_id = ?1)", params![scan_id])?;
@@ -552,6 +596,7 @@ impl Database {
             for (ordinal, file_id) in file_ids.iter().enumerate() {
                 insert_member.execute(params![group_id, file_id, ordinal as i64])?;
             }
+            on_group();
         }
 
         Ok(())

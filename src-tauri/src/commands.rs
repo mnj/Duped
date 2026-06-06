@@ -1,4 +1,4 @@
-use crate::db::{Database, DuplicateGroup, FileRecord, ScanInfo, Stats};
+use crate::db::{Database, DuplicateGroup, FileRecord, MaterializedPhotoGroupRecord, ScanInfo, Stats};
 use crate::scanner::{hash_candidates, optimize_matching_groups, phash_images, walk_and_collect, ScanProgress};
 use serde::Serialize;
 use std::fs;
@@ -34,6 +34,12 @@ pub struct PhotoGroup {
     pub files: Vec<FileRecord>,
     pub min_similarity: f64,
     pub avg_similarity: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PhotoGroupsPage {
+    pub total: i64,
+    pub groups: Vec<PhotoGroup>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -467,51 +473,53 @@ pub fn load_image_preview(path: String) -> Result<ImagePreview, String> {
     Ok(ImagePreview { bytes, mime_type })
 }
 
+fn to_photo_groups(groups: Vec<MaterializedPhotoGroupRecord>) -> Vec<PhotoGroup> {
+    groups
+        .into_iter()
+        .map(|group| {
+            PhotoGroup {
+                files: group.files,
+                min_similarity: group.min_similarity,
+                avg_similarity: group.avg_similarity,
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
-pub fn get_photo_groups(
+pub fn get_photo_groups_page(
     state: tauri::State<'_, AppState>,
     min_similarity: f64,
-) -> Result<Vec<PhotoGroup>, String> {
+    offset: i64,
+    limit: i64,
+) -> Result<PhotoGroupsPage, String> {
+    let db = get_db(&state)?;
+    let scan_id = get_scan_id(&state)?;
+    let total = db
+        .get_photo_group_count(scan_id, min_similarity)
+        .map_err(|e| format!("Failed to get photo group count: {}", e))?;
+    let groups = db
+        .get_photo_group_page(scan_id, min_similarity, offset, limit)
+        .map_err(|e| format!("Failed to get photo groups: {}", e))?;
+
+    Ok(PhotoGroupsPage {
+        total,
+        groups: to_photo_groups(groups),
+    })
+}
+
+#[tauri::command]
+pub fn get_photo_group(
+    state: tauri::State<'_, AppState>,
+    min_similarity: f64,
+    index: i64,
+) -> Result<Option<PhotoGroup>, String> {
     let db = get_db(&state)?;
     let scan_id = get_scan_id(&state)?;
     let groups = db
-        .get_photo_groups(scan_id, min_similarity)
-        .map_err(|e| format!("Failed to get photo groups: {}", e))?;
-
-    let result: Vec<PhotoGroup> = groups
-        .into_iter()
-        .map(|files| {
-            let n = files.len();
-            let mut min_sim = 100.0f64;
-            let mut total_sim = 0.0f64;
-            let mut count = 0i64;
-
-            for i in 0..n {
-                if let Some(hash_a) = files[i].phash {
-                    for j in (i + 1)..n {
-                        if let Some(hash_b) = files[j].phash {
-                            let sim = crate::phasher::similarity_pct(hash_a, hash_b);
-                            if sim < min_sim {
-                                min_sim = sim;
-                            }
-                            total_sim += sim;
-                            count += 1;
-                        }
-                    }
-                }
-            }
-
-            let avg_sim = if count > 0 { total_sim / count as f64 } else { 0.0 };
-
-            PhotoGroup {
-                files,
-                min_similarity: min_sim,
-                avg_similarity: avg_sim,
-            }
-        })
-        .collect();
-
-    Ok(result)
+        .get_photo_group_page(scan_id, min_similarity, index, 1)
+        .map_err(|e| format!("Failed to get photo group: {}", e))?;
+    Ok(to_photo_groups(groups).into_iter().next())
 }
 
 fn get_dismissed_scans(dir: &PathBuf) -> Result<Vec<PathBuf>, String> {

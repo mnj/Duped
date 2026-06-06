@@ -270,14 +270,20 @@ pub fn optimize_matching_groups(
     scan_id: i64,
     progress: &ScanProgress,
 ) -> Result<(), Box<dyn Error>> {
+    let exact_group_count = db.get_exact_duplicate_group_count(scan_id).unwrap_or(0).max(0) as u64;
     progress.set_phase(PHASE_OPTIMIZING);
-    progress.files_to_hash.store(4, Ordering::Relaxed);
+    progress.files_to_hash.store(exact_group_count + 3, Ordering::Relaxed);
     progress.files_hashed.store(0, Ordering::Relaxed);
     progress.bytes_hashed.store(0, Ordering::Relaxed);
 
     progress.set_detail("Building exact duplicate match groups");
-    db.rebuild_duplicate_groups(scan_id, || progress.is_aborted())?;
-    progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+    db.rebuild_duplicate_groups(
+        scan_id,
+        || progress.is_aborted(),
+        || {
+            progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+        },
+    )?;
     if progress.is_aborted() {
         return Ok(());
     }
