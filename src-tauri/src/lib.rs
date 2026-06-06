@@ -34,6 +34,8 @@ pub fn run(use_tmp_db: bool, storage_dir: Option<PathBuf>) {
             commands::get_photo_group,
             commands::load_image_preview,
             commands::load_file_metadata,
+            commands::load_difference_boxes,
+            commands::load_difference_mask,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

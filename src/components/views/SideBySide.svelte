@@ -8,18 +8,48 @@
   let currentIndex = $state(0);
   let currentGroup = $derived(groups[currentIndex] || null);
   let fileMetadata = $state({});
+  let imageUrls = $state({});
+  let imageMimeTypes = $state({});
+  let loadedImages = $state({});
+  let diffEnabled = $state(false);
+  let diffMaskUrl = $state(null);
+
+  function isImageFile(path) {
+    return imageMimeTypes[path]?.startsWith("image/") ?? false;
+  }
+
+  function revokeImageUrls() {
+    for (const url of Object.values(imageUrls)) {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    }
+    if (diffMaskUrl) {
+      URL.revokeObjectURL(diffMaskUrl);
+    }
+  }
 
   async function loadMetadata(group) {
     if (!group) {
+      revokeImageUrls();
       fileMetadata = {};
+      imageUrls = {};
+      imageMimeTypes = {};
+      loadedImages = {};
+      diffMaskUrl = null;
       return;
     }
+
+    revokeImageUrls();
 
     const entries = await Promise.all(
       group.files.slice(0, 2).map(async (file) => {
         try {
-          const metadata = await invoke("load_file_metadata", { path: file.path });
-          return [file.path, metadata];
+          const [metadata, preview] = await Promise.all([
+            invoke("load_file_metadata", { path: file.path }),
+            invoke("load_image_preview", { path: file.path }).catch(() => null),
+          ]);
+          return [file.path, { metadata, preview }];
         } catch (err) {
           console.error("Failed to load file metadata:", err);
           return [file.path, null];
@@ -27,7 +57,33 @@
       }),
     );
 
-    fileMetadata = Object.fromEntries(entries);
+    fileMetadata = Object.fromEntries(entries.map(([path, value]) => [path, value?.metadata ?? null]));
+
+    const nextUrls = {};
+    const nextMimeTypes = {};
+    for (const [path, value] of entries) {
+      if (!value?.preview) continue;
+      const bytes = new Uint8Array(value.preview.bytes);
+      const blob = new Blob([bytes], { type: value.preview.mime_type });
+      nextUrls[path] = URL.createObjectURL(blob);
+      nextMimeTypes[path] = value.preview.mime_type;
+    }
+    imageUrls = nextUrls;
+    imageMimeTypes = nextMimeTypes;
+    loadedImages = {};
+
+    const [left, right] = group.files;
+    if (left && right && nextUrls[left.path] && nextUrls[right.path]) {
+      const mask = await invoke("load_difference_mask", {
+        referencePath: left.path,
+        candidatePath: right.path,
+      });
+      const bytes = new Uint8Array(mask.bytes);
+      const blob = new Blob([bytes], { type: mask.mime_type });
+      diffMaskUrl = URL.createObjectURL(blob);
+    } else {
+      diffMaskUrl = null;
+    }
   }
 
   function formatDuration(seconds) {
@@ -60,6 +116,14 @@
 
   function fileDir(path) {
     return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  function markLoaded(path) {
+    loadedImages = { ...loadedImages, [path]: true };
+  }
+
+  function markFailed(path) {
+    loadedImages = { ...loadedImages, [path]: false };
   }
 
   async function handleTrash(path) {
@@ -100,6 +164,16 @@
         <code class="sbs-hash">{currentGroup.hash}</code>
         <span class="sbs-size">{formatBytes(currentGroup.size)} each</span>
       </div>
+      <label
+        class="sbs-diff-toggle"
+        title="Experimental. Shows a grayscale difference mask, and it may not be especially accurate."
+      >
+        <input type="checkbox" bind:checked={diffEnabled} />
+        <span class="ios-toggle-track" aria-hidden="true">
+          <span class="ios-toggle-thumb"></span>
+        </span>
+        <span>Show diff mask</span>
+      </label>
     </div>
 
     <div class="sbs-comparison">
@@ -108,11 +182,36 @@
           <div class="sbs-panel-header">
             <span class="sbs-panel-label">File {i + 1}</span>
           </div>
-          <div class="sbs-file-icon">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
+          <div class="sbs-media">
+            {#if imageUrls[file.path] && isImageFile(file.path)}
+              <div class="sbs-img-wrapper">
+                <img
+                  src={imageUrls[file.path]}
+                  alt={fileName(file.path)}
+                  class="sbs-img"
+                  class:loaded={loadedImages[file.path] === true}
+                  onload={() => markLoaded(file.path)}
+                  onerror={() => markFailed(file.path)}
+                />
+                {#if loadedImages[file.path] !== true}
+                  <div class="sbs-placeholder">{fileName(file.path)}</div>
+                {/if}
+                {#if diffEnabled && i === 1 && diffMaskUrl}
+                  <img
+                    src={diffMaskUrl}
+                    alt="Difference mask"
+                    class="diff-mask"
+                  />
+                {/if}
+              </div>
+            {:else}
+              <div class="sbs-file-icon">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                </svg>
+              </div>
+            {/if}
           </div>
           <div class="sbs-file-info">
             <span class="sbs-file-name">{fileName(file.path)}</span>

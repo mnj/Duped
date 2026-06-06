@@ -12,6 +12,9 @@
   let loadedImages = $state({});
   let imageUrls = $state({});
   let fileMetadata = $state({});
+  let imageMimeTypes = $state({});
+  let diffEnabled = $state(false);
+  let diffMaskUrls = $state({});
   let imageLoadGeneration = 0;
 
   function revokeImageUrls() {
@@ -20,13 +23,58 @@
         URL.revokeObjectURL(url);
       }
     }
+    for (const url of Object.values(diffMaskUrls)) {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    }
     imageUrls = {};
+    diffMaskUrls = {};
   }
 
   function resetLoadedImages() {
     revokeImageUrls();
     loadedImages = {};
     fileMetadata = {};
+    imageMimeTypes = {};
+  }
+
+  function isImageFile(path) {
+    return imageMimeTypes[path]?.startsWith("image/") ?? false;
+  }
+
+  async function computeDiffMasks(group, generation) {
+    if (!group || group.files.length < 2) {
+      return;
+    }
+
+    const reference = group.files[0];
+    if (!isImageFile(reference.path)) {
+      return;
+    }
+
+    const tasks = group.files.slice(1).map(async (file) => {
+      if (!isImageFile(file.path)) {
+        return [file.path, null];
+      }
+      const mask = await invoke("load_difference_mask", {
+        referencePath: reference.path,
+        candidatePath: file.path,
+      });
+      if (generation !== imageLoadGeneration) {
+        return [file.path, null];
+      }
+      const bytes = new Uint8Array(mask.bytes);
+      const blob = new Blob([bytes], { type: mask.mime_type });
+      const url = URL.createObjectURL(blob);
+      return [file.path, url];
+    });
+
+    const results = await Promise.all(tasks);
+    if (generation !== imageLoadGeneration) {
+      return;
+    }
+    diffMaskUrls = Object.fromEntries(results);
   }
 
   async function loadImagesForGroup(group) {
@@ -49,6 +97,7 @@
         const url = URL.createObjectURL(blob);
         imageUrls = { ...imageUrls, [file.path]: url };
         fileMetadata = { ...fileMetadata, [file.path]: metadata };
+        imageMimeTypes = { ...imageMimeTypes, [file.path]: preview.mime_type };
       } catch (err) {
         console.error("Failed to load image preview:", err);
         if (generation === imageLoadGeneration) {
@@ -56,6 +105,10 @@
         }
       }
     }));
+
+    if (generation === imageLoadGeneration) {
+      await computeDiffMasks(group, generation);
+    }
   }
 
   async function loadPhotos() {
@@ -183,6 +236,16 @@
         {/each}
       </select>
     </div>
+    <label
+      class="photo-diff-toggle"
+      title="Experimental. Shows a grayscale difference mask, and it may not be especially accurate."
+    >
+      <input type="checkbox" bind:checked={diffEnabled} />
+      <span class="ios-toggle-track" aria-hidden="true">
+        <span class="ios-toggle-thumb"></span>
+      </span>
+      <span>Show diff mask</span>
+    </label>
 
     {#if totalGroups > 0}
       <div class="photo-nav">
@@ -248,6 +311,13 @@
                 </svg>
                 <span>{fileName(file.path)}</span>
               </div>
+              {/if}
+              {#if diffEnabled && i > 0 && diffMaskUrls[file.path]}
+                <img
+                  src={diffMaskUrls[file.path]}
+                  alt="Difference mask"
+                  class="diff-mask"
+                />
               {/if}
             </div>
             <div class="photo-meta">

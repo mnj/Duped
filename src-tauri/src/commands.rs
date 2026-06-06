@@ -1,5 +1,6 @@
 use crate::db::{Database, DuplicateGroup, FileRecord, MaterializedPhotoGroupRecord, ScanInfo, Stats};
 use crate::scanner::{hash_candidates, optimize_matching_groups, phash_images, walk_and_collect, ScanProgress};
+use image::{DynamicImage, ImageFormat, Luma, imageops::FilterType};
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -57,6 +58,14 @@ pub struct FileMetadata {
     pub codec: Option<String>,
     pub format_name: Option<String>,
     pub ffprobe_streams_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffBox {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub struct AppState {
@@ -531,6 +540,308 @@ fn prune_ffprobe_value(value: &mut serde_json::Value) {
     }
 }
 
+fn grayscale_values(image: &DynamicImage, width: u32, height: u32) -> Vec<f32> {
+    image
+        .resize_exact(width, height, FilterType::Triangle)
+        .to_luma8()
+        .pixels()
+        .map(|p| p[0] as f32)
+        .collect()
+}
+
+fn build_integral(values: &[f32], width: u32, height: u32) -> Vec<f64> {
+    let stride = width as usize + 1;
+    let mut integral = vec![0.0f64; stride * (height as usize + 1)];
+    for y in 0..height as usize {
+        let mut row_sum = 0.0f64;
+        for x in 0..width as usize {
+            row_sum += values[y * width as usize + x] as f64;
+            integral[(y + 1) * stride + (x + 1)] = integral[y * stride + (x + 1)] + row_sum;
+        }
+    }
+    integral
+}
+
+fn rect_sum(integral: &[f64], width: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> f64 {
+    let stride = width as usize + 1;
+    let a = integral[y0 as usize * stride + x0 as usize];
+    let b = integral[y0 as usize * stride + x1 as usize];
+    let c = integral[y1 as usize * stride + x0 as usize];
+    let d = integral[y1 as usize * stride + x1 as usize];
+    d - b - c + a
+}
+
+fn otsu_threshold(values: &[u8]) -> u8 {
+    let mut histogram = [0u32; 256];
+    for &value in values {
+        histogram[value as usize] += 1;
+    }
+
+    let total = values.len() as f32;
+    let mut sum = 0.0f32;
+    for (i, &count) in histogram.iter().enumerate() {
+        sum += i as f32 * count as f32;
+    }
+
+    let mut sum_background = 0.0f32;
+    let mut weight_background = 0.0f32;
+    let mut best_variance = 0.0f32;
+    let mut best_threshold = 0u8;
+
+    for (threshold, &count) in histogram.iter().enumerate() {
+        weight_background += count as f32;
+        if weight_background == 0.0 {
+            continue;
+        }
+
+        let weight_foreground = total - weight_background;
+        if weight_foreground == 0.0 {
+            break;
+        }
+
+        sum_background += threshold as f32 * count as f32;
+        let mean_background = sum_background / weight_background;
+        let mean_foreground = (sum - sum_background) / weight_foreground;
+        let variance = weight_background
+            * weight_foreground
+            * (mean_background - mean_foreground)
+            * (mean_background - mean_foreground);
+
+        if variance > best_variance {
+            best_variance = variance;
+            best_threshold = threshold as u8;
+        }
+    }
+
+    best_threshold
+}
+
+fn dilate(mask: &[bool], width: u32, height: u32) -> Vec<bool> {
+    let mut out = vec![false; mask.len()];
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let mut on = false;
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                        continue;
+                    }
+                    if mask[ny as usize * width as usize + nx as usize] {
+                        on = true;
+                        break;
+                    }
+                }
+                if on {
+                    break;
+                }
+            }
+            out[y as usize * width as usize + x as usize] = on;
+        }
+    }
+    out
+}
+
+fn erode(mask: &[bool], width: u32, height: u32) -> Vec<bool> {
+    let mut out = vec![false; mask.len()];
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let mut on = true;
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                        on = false;
+                        break;
+                    }
+                    if !mask[ny as usize * width as usize + nx as usize] {
+                        on = false;
+                        break;
+                    }
+                }
+                if !on {
+                    break;
+                }
+            }
+            out[y as usize * width as usize + x as usize] = on;
+        }
+    }
+    out
+}
+
+fn detect_difference_boxes(left: &DynamicImage, right: &DynamicImage) -> Vec<DiffBox> {
+    let base_width = 384u32;
+    let left_height = ((left.height() as f32 / left.width() as f32) * base_width as f32).round().max(1.0) as u32;
+    let right_height = ((right.height() as f32 / right.width() as f32) * base_width as f32).round().max(1.0) as u32;
+    let base_height = left_height.min(right_height).max(32);
+    let left_values = grayscale_values(left, base_width, base_height);
+    let right_values = grayscale_values(right, base_width, base_height);
+
+    let left_sq: Vec<f32> = left_values.iter().map(|v| v * v).collect();
+    let right_sq: Vec<f32> = right_values.iter().map(|v| v * v).collect();
+    let cross: Vec<f32> = left_values
+        .iter()
+        .zip(right_values.iter())
+        .map(|(l, r)| l * r)
+        .collect();
+
+    let left_int = build_integral(&left_values, base_width, base_height);
+    let right_int = build_integral(&right_values, base_width, base_height);
+    let left_sq_int = build_integral(&left_sq, base_width, base_height);
+    let right_sq_int = build_integral(&right_sq, base_width, base_height);
+    let cross_int = build_integral(&cross, base_width, base_height);
+
+    let mut diff_map = vec![0u8; (base_width * base_height) as usize];
+
+    const C1: f32 = 6.5025;
+    const C2: f32 = 58.5225;
+
+    let radius = 3u32;
+    for y in 0..base_height {
+        for x in 0..base_width {
+            let x0 = x.saturating_sub(radius);
+            let y0 = y.saturating_sub(radius);
+            let x1 = (x + radius + 1).min(base_width);
+            let y1 = (y + radius + 1).min(base_height);
+            let samples = ((x1 - x0) * (y1 - y0)).max(1) as f32;
+
+            let left_sum = rect_sum(&left_int, base_width, x0, y0, x1, y1) as f32;
+            let right_sum = rect_sum(&right_int, base_width, x0, y0, x1, y1) as f32;
+            let left_sq_sum = rect_sum(&left_sq_int, base_width, x0, y0, x1, y1) as f32;
+            let right_sq_sum = rect_sum(&right_sq_int, base_width, x0, y0, x1, y1) as f32;
+            let cross_sum = rect_sum(&cross_int, base_width, x0, y0, x1, y1) as f32;
+
+            let mean_left = left_sum / samples;
+            let mean_right = right_sum / samples;
+            let variance_left = (left_sq_sum / samples) - mean_left * mean_left;
+            let variance_right = (right_sq_sum / samples) - mean_right * mean_right;
+            let covariance = (cross_sum / samples) - mean_left * mean_right;
+
+            let numerator = (2.0 * mean_left * mean_right + C1) * (2.0 * covariance + C2);
+            let denominator = (mean_left * mean_left + mean_right * mean_right + C1)
+                * (variance_left + variance_right + C2);
+            let ssim = if denominator.abs() < f32::EPSILON {
+                1.0
+            } else {
+                (numerator / denominator).clamp(-1.0, 1.0)
+            };
+
+            diff_map[(y * base_width + x) as usize] = ((1.0 - ssim) * 255.0).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    let threshold = otsu_threshold(&diff_map).max(28);
+    let mut changed = vec![false; diff_map.len()];
+    for (idx, &score) in diff_map.iter().enumerate() {
+        changed[idx] = score >= threshold;
+    }
+
+    let changed = dilate(
+        &erode(&dilate(&changed, base_width, base_height), base_width, base_height),
+        base_width,
+        base_height,
+    );
+
+    let mut visited = vec![false; changed.len()];
+    let mut boxes = Vec::new();
+
+    for gy in 0..base_height {
+        for gx in 0..base_width {
+            let idx = (gy * base_width + gx) as usize;
+            if !changed[idx] || visited[idx] {
+                continue;
+            }
+
+            let mut queue = std::collections::VecDeque::from([(gx, gy)]);
+            visited[idx] = true;
+            let mut min_x = gx;
+            let mut min_y = gy;
+            let mut max_x = gx;
+            let mut max_y = gy;
+            let mut cells = 0u32;
+
+            while let Some((cx, cy)) = queue.pop_front() {
+                cells += 1;
+                min_x = min_x.min(cx);
+                min_y = min_y.min(cy);
+                max_x = max_x.max(cx);
+                max_y = max_y.max(cy);
+
+                for (dx, dy) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                    let nx = cx as i32 + dx;
+                    let ny = cy as i32 + dy;
+                    if nx < 0 || ny < 0 || nx >= base_width as i32 || ny >= base_height as i32 {
+                        continue;
+                    }
+                    let nidx = (ny as u32 * base_width + nx as u32) as usize;
+                    if changed[nidx] && !visited[nidx] {
+                        visited[nidx] = true;
+                        queue.push_back((nx as u32, ny as u32));
+                    }
+                }
+            }
+
+            if cells < 40 {
+                continue;
+            }
+
+            let width = max_x - min_x + 1;
+            let height = max_y - min_y + 1;
+            let area_ratio = (width * height) as f32 / (base_width * base_height) as f32;
+            if area_ratio > 0.30 {
+                continue;
+            }
+
+            let pad = 4u32;
+            let box_x = min_x.saturating_sub(pad);
+            let box_y = min_y.saturating_sub(pad);
+            let box_w = (width + pad * 2).min(base_width - box_x);
+            let box_h = (height + pad * 2).min(base_height - box_y);
+
+            boxes.push(DiffBox {
+                x: ((box_x as f32 / base_width as f32) * right.width() as f32).round() as u32,
+                y: ((box_y as f32 / base_height as f32) * right.height() as f32).round() as u32,
+                width: ((box_w as f32 / base_width as f32) * right.width() as f32).round() as u32,
+                height: ((box_h as f32 / base_height as f32) * right.height() as f32).round() as u32,
+            });
+        }
+    }
+
+    boxes.sort_by_key(|b| std::cmp::Reverse(b.width * b.height));
+    boxes.truncate(4);
+    boxes
+}
+
+fn build_difference_mask(left: &DynamicImage, right: &DynamicImage) -> Result<Vec<u8>, String> {
+    let target_width = right.width().max(1);
+    let target_height = right.height().max(1);
+    let left_gray = left
+        .resize_exact(target_width, target_height, FilterType::Triangle)
+        .to_luma8();
+    let right_gray = right
+        .resize_exact(target_width, target_height, FilterType::Triangle)
+        .to_luma8();
+
+    let mut mask = image::GrayImage::new(target_width, target_height);
+    for y in 0..target_height {
+        for x in 0..target_width {
+            let left_value = left_gray.get_pixel(x, y)[0];
+            let right_value = right_gray.get_pixel(x, y)[0];
+            let diff = left_value.abs_diff(right_value);
+            let value = 255u8.saturating_sub(diff);
+            mask.put_pixel(x, y, Luma([value]));
+        }
+    }
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageLuma8(mask)
+        .write_to(&mut cursor, ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode difference mask: {}", e))?;
+    Ok(cursor.into_inner())
+}
+
 #[tauri::command]
 pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
     let path_buf = PathBuf::from(&path);
@@ -621,6 +932,28 @@ pub fn load_file_metadata(path: String) -> Result<FileMetadata, String> {
     }
 
     Ok(metadata)
+}
+
+#[tauri::command]
+pub fn load_difference_boxes(reference_path: String, candidate_path: String) -> Result<Vec<DiffBox>, String> {
+    let left = image::open(&reference_path)
+        .map_err(|e| format!("Failed to open reference image: {}", e))?;
+    let right = image::open(&candidate_path)
+        .map_err(|e| format!("Failed to open candidate image: {}", e))?;
+    Ok(detect_difference_boxes(&left, &right))
+}
+
+#[tauri::command]
+pub fn load_difference_mask(reference_path: String, candidate_path: String) -> Result<ImagePreview, String> {
+    let left = image::open(&reference_path)
+        .map_err(|e| format!("Failed to open reference image: {}", e))?;
+    let right = image::open(&candidate_path)
+        .map_err(|e| format!("Failed to open candidate image: {}", e))?;
+    let bytes = build_difference_mask(&left, &right)?;
+    Ok(ImagePreview {
+        bytes,
+        mime_type: "image/png".to_string(),
+    })
 }
 
 fn to_photo_groups(groups: Vec<MaterializedPhotoGroupRecord>) -> Vec<PhotoGroup> {
