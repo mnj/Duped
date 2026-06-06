@@ -46,16 +46,15 @@ export async function startScan(path) {
     appState.progress = null;
     appState.stats = event.payload.stats;
     if (!event.payload.aborted) {
+      const newPath = await invoke("finalize_scan");
+      if (newPath) {
+        appState.dbPath = newPath;
+      }
       await loadDuplicates();
       appState.view = "results";
     } else {
       appState.view = "home";
     }
-    notify();
-  });
-
-  await listen("db-moved", (event) => {
-    appState.dbPath = event.payload;
     notify();
   });
 

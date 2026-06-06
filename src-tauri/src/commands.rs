@@ -85,8 +85,8 @@ fn move_db_from_tmp(tmp_path: &PathBuf, app: &AppHandle) -> Result<PathBuf, Stri
     let dir = app_data_dir(app)?;
     let filename = tmp_path.file_name().ok_or("Invalid temp path")?;
     let final_path = dir.join(filename);
-    std::fs::rename(tmp_path, &final_path)
-        .map_err(|e| format!("Failed to move database: {}", e))?;
+    std::fs::copy(tmp_path, &final_path)
+        .map_err(|e| format!("Failed to copy database: {}", e))?;
     Ok(final_path)
 }
 
@@ -125,7 +125,6 @@ pub async fn start_scan(
     let app_clone = app.clone();
     let db_clone = db.clone();
     let progress_clone = progress.clone();
-    let db_path_clone = db_path.clone();
 
     std::thread::spawn(move || {
         let app_handle = app_clone;
@@ -143,12 +142,6 @@ pub async fn start_scan(
         } else {
             let _ = db.complete_scan(scan_id);
             let _ = db.create_indexes();
-            
-            if use_tmp {
-                if let Ok(final_path) = move_db_from_tmp(&db_path_clone, &app_handle) {
-                    let _ = app_handle.emit("db-moved", final_path.to_string_lossy().to_string());
-                }
-            }
         }
 
         let stats = db.get_stats(scan_id).unwrap_or(Stats {
@@ -336,6 +329,43 @@ pub fn list_scans(app: AppHandle) -> Result<Vec<PathBuf>, String> {
     scans.sort();
     scans.reverse();
     Ok(scans)
+}
+
+#[tauri::command]
+pub fn finalize_scan(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let use_tmp = state.use_tmp_db;
+    if !use_tmp {
+        return Ok(None);
+    }
+
+    let tmp_path = {
+        let path_lock = state.db_path.lock().unwrap();
+        path_lock.clone().ok_or("No database path")?
+    };
+
+    {
+        let mut db_lock = state.db.lock().unwrap();
+        *db_lock = None;
+    }
+
+    let final_path = move_db_from_tmp(&tmp_path, &app)?;
+    let final_path_str = final_path.to_string_lossy().to_string();
+
+    let db = Arc::new(
+        Database::new(&final_path).map_err(|e| format!("Failed to reopen database: {}", e))?,
+    );
+
+    {
+        let mut db_lock = state.db.lock().unwrap();
+        *db_lock = Some(db);
+        let mut path_lock = state.db_path.lock().unwrap();
+        *path_lock = Some(final_path);
+    }
+
+    Ok(Some(final_path_str))
 }
 
 #[tauri::command]
