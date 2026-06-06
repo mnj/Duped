@@ -6,6 +6,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub const PHASE_WALKING: u8 = 0;
@@ -19,6 +20,7 @@ pub struct ScanProgress {
     pub files_hashed: AtomicU64,
     pub bytes_hashed: AtomicU64,
     pub phase: AtomicU64,
+    pub detail: Mutex<String>,
     pub aborted: AtomicBool,
     pub completed: AtomicBool,
 }
@@ -31,6 +33,7 @@ impl ScanProgress {
             files_hashed: AtomicU64::new(0),
             bytes_hashed: AtomicU64::new(0),
             phase: AtomicU64::new(PHASE_WALKING as u64),
+            detail: Mutex::new(String::new()),
             aborted: AtomicBool::new(false),
             completed: AtomicBool::new(false),
         }
@@ -63,6 +66,15 @@ impl ScanProgress {
             PHASE_OPTIMIZING => "optimizing",
             _ => "walking",
         }
+    }
+
+    pub fn set_detail(&self, detail: impl Into<String>) {
+        let mut lock = self.detail.lock().unwrap();
+        *lock = detail.into();
+    }
+
+    pub fn detail(&self) -> String {
+        self.detail.lock().unwrap().clone()
     }
 }
 
@@ -154,6 +166,7 @@ pub fn hash_candidates(
     let size_groups = db.get_files_by_size_groups(scan_id)?;
 
     progress.set_phase(PHASE_HASHING);
+    progress.set_detail("Hashing files with matching sizes");
     let total_to_hash: u64 = size_groups.iter().map(|g| g.len() as u64).sum();
     progress
         .files_to_hash
@@ -218,6 +231,7 @@ pub fn phash_images(
 
     let total = db_path.len() as u64;
     progress.set_phase(PHASE_PHASHING);
+    progress.set_detail("Computing perceptual hashes for image files");
     progress.files_hashed.store(0, Ordering::Relaxed);
     progress.bytes_hashed.store(0, Ordering::Relaxed);
     progress.files_to_hash.store(total, Ordering::Relaxed);
@@ -261,14 +275,16 @@ pub fn optimize_matching_groups(
     progress.files_hashed.store(0, Ordering::Relaxed);
     progress.bytes_hashed.store(0, Ordering::Relaxed);
 
-    db.rebuild_duplicate_groups(scan_id)?;
+    progress.set_detail("Building exact duplicate match groups");
+    db.rebuild_duplicate_groups(scan_id, || progress.is_aborted())?;
     progress.files_hashed.fetch_add(1, Ordering::Relaxed);
     if progress.is_aborted() {
         return Ok(());
     }
 
     for threshold in [95_i64, 90_i64, 85_i64] {
-        db.rebuild_photo_groups(scan_id, threshold)?;
+        progress.set_detail(format!("Building photo similarity groups at {}%", threshold));
+        db.rebuild_photo_groups(scan_id, threshold, || progress.is_aborted())?;
         progress.files_hashed.fetch_add(1, Ordering::Relaxed);
         if progress.is_aborted() {
             break;

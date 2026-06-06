@@ -1,5 +1,5 @@
 <script>
-  import { formatBytes, trashFile } from "../../stores.js";
+  import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
   import { appState, subscribe } from "../../stores.js";
 
   let { groups = [] } = $props();
@@ -33,6 +33,13 @@
   async function handleTrash(path) {
     if (confirm(`Move "${fileName(path)}" to trash?`)) {
       await trashFile(path);
+    }
+  }
+
+  async function handleSymlink(path, targetPath) {
+    if (!targetPath) return;
+    if (confirm(`Replace "${fileName(path)}" with a symlink to "${fileName(targetPath)}"?`)) {
+      await replaceWithSymlink(path, targetPath);
     }
   }
 </script>
@@ -106,6 +113,7 @@
               <div class="file-actions">
                 <button class="keep" title="Keep this file">Keep</button>
                 <button class="delete" title="Move to trash" onclick={() => handleTrash(file.path)}>Delete</button>
+                <button class="keep" title="Replace with symlink" onclick={() => handleSymlink(file.path, selectedGroup.files.find((f) => f.path !== file.path)?.path)}>Symlink</button>
               </div>
             </div>
           {/each}

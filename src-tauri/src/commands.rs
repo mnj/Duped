@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {
     pub phase: String,
+    pub detail: String,
     pub files_walked: u64,
     pub files_to_hash: u64,
     pub files_hashed: u64,
@@ -211,6 +212,7 @@ pub async fn start_scan(
                 "scan-progress",
                 ProgressEvent {
                     phase: progress_clone.phase_name().to_string(),
+                    detail: progress_clone.detail(),
                     files_walked: progress_clone
                         .files_walked
                         .load(std::sync::atomic::Ordering::Relaxed),
@@ -256,6 +258,7 @@ pub fn get_progress(state: tauri::State<'_, AppState>) -> Result<ProgressEvent, 
 
     Ok(ProgressEvent {
         phase: progress.phase_name().to_string(),
+        detail: progress.detail(),
         files_walked: progress
             .files_walked
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -409,6 +412,36 @@ pub fn dismiss_scan(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn trash_file(path: String) -> Result<(), String> {
     trash::delete(&path).map_err(|e| format!("Failed to trash file: {}", e))
+}
+
+#[tauri::command]
+pub fn replace_with_symlink(path: String, target_path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    let target_buf = PathBuf::from(&target_path);
+
+    if path_buf == target_buf {
+        return Err("Cannot replace a file with a symlink to itself".to_string());
+    }
+
+    if !target_buf.exists() {
+        return Err("Target file does not exist".to_string());
+    }
+
+    trash::delete(&path).map_err(|e| format!("Failed to remove file before symlink: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target_buf, &path_buf)
+            .map_err(|e| format!("Failed to create symlink: {}", e))?;
+    }
+
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(&target_buf, &path_buf)
+            .map_err(|e| format!("Failed to create symlink: {}", e))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -599,6 +632,7 @@ pub async fn add_path_to_scan(
                 "scan-progress",
                 ProgressEvent {
                     phase: progress_clone.phase_name().to_string(),
+                    detail: progress_clone.detail(),
                     files_walked: progress_clone
                         .files_walked
                         .load(std::sync::atomic::Ordering::Relaxed),

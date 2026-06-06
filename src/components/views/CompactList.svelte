@@ -1,5 +1,5 @@
 <script>
-  import { formatBytes, trashFile } from "../../stores.js";
+  import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
 
   let { groups = [] } = $props();
 
@@ -29,6 +29,19 @@
     e.stopPropagation();
     if (confirm(`Move "${fileName(path)}" to trash?`)) {
       await trashFile(path);
+    }
+  }
+
+  function symlinkTarget(group, path) {
+    return group.files.find((file) => file.path !== path)?.path ?? null;
+  }
+
+  async function handleSymlink(e, group, path) {
+    e.stopPropagation();
+    const targetPath = symlinkTarget(group, path);
+    if (!targetPath) return;
+    if (confirm(`Replace "${fileName(path)}" with a symlink to "${fileName(targetPath)}"?`)) {
+      await replaceWithSymlink(path, targetPath);
     }
   }
 
@@ -119,6 +132,12 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="3 6 5 6 21 6"/>
                       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                  </button>
+                  <button class="compact-trash" onclick={(e) => handleSymlink(e, group, file.path)} aria-label="Replace with symlink">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M10 13a5 5 0 0 0 7.54.54l1.92-1.92a5 5 0 0 0-7.07-7.07L11.3 5.63"/>
+                      <path d="M14 11a5 5 0 0 0-7.54-.54L4.54 12.38a5 5 0 1 0 7.07 7.07l1.88-1.88"/>
                     </svg>
                   </button>
                 </div>

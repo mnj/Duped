@@ -1,6 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { formatBytes, trashFile } from "../../stores.js";
+  import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
 
   const similarityOptions = [95, 90, 85];
   let photoGroups = $state([]);
@@ -103,8 +103,18 @@
   }
 
   function markFailed(path, event) {
-    event.currentTarget.style.display = "none";
     loadedImages = { ...loadedImages, [path]: false };
+  }
+
+  function symlinkTarget(path) {
+    return currentGroup?.files.find((file) => file.path !== path)?.path ?? null;
+  }
+
+  async function handleSymlink(path, targetPath) {
+    if (!targetPath) return;
+    if (confirm(`Replace "${fileName(path)}" with a symlink to "${fileName(targetPath)}"?`)) {
+      await replaceWithSymlink(path, targetPath);
+    }
   }
 
   async function handleTrash(path) {
@@ -210,6 +220,11 @@
               </svg>
               Move to Trash
             </button>
+            {#if currentGroup.files.length > 1}
+              <button class="photo-trash" onclick={() => handleSymlink(file.path, symlinkTarget(file.path))}>
+                Replace With Symlink
+              </button>
+            {/if}
           </div>
         {/each}
       </div>

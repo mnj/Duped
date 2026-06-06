@@ -26,6 +26,7 @@ pub fn run(use_tmp_db: bool) {
             commands::dismiss_scan,
             commands::finalize_scan,
             commands::trash_file,
+            commands::replace_with_symlink,
             commands::add_path_to_scan,
             commands::merge_databases,
             commands::get_photo_groups,

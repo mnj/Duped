@@ -37,7 +37,7 @@
       {:else if isPhotoHashingPhase}
         Analyzing photos with perceptual hashing...
       {:else if isOptimizingPhase}
-        Building duplicate match indexes...
+        Preparing duplicate match groups...
       {:else}
         Processing files...
       {/if}
@@ -110,7 +110,7 @@
         <line x1="12" y1="8" x2="12.01" y2="8"/>
       </svg>
       <span>
-        Finalizing duplicate matching groups for exact matches and photo similarity tiers before the scan database is saved.
+        {progress?.detail || "Preparing exact and photo-based match groups before showing results."}
       </span>
     </div>
   {/if}

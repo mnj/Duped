@@ -169,6 +169,25 @@ export async function trashFile(path) {
   }
 }
 
+export async function replaceWithSymlink(path, targetPath) {
+  try {
+    await invoke("replace_with_symlink", { path, targetPath });
+    appState.duplicates = appState.duplicates.map(group => ({
+      ...group,
+      files: group.files.map((f) => (
+        f.path === path
+          ? { ...f, path }
+          : f
+      ))
+    }));
+    notify();
+    return true;
+  } catch (err) {
+    console.error("Failed to replace with symlink:", err);
+    return false;
+  }
+}
+
 export async function addPathToScan(dbPath, newPath) {
   clearScanListeners();
   resetDuplicateState();

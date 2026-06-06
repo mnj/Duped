@@ -9,7 +9,7 @@ A fast duplicate file finder built with Tauri, Rust, and Svelte.
 - **Multiple view modes**: Card Grid, Table, and Split Pane
 - **Scan management**: Abort scans, view recent scans, dismiss scans from list
 - **Performance optimized**: Batch inserts (50K files), deferred index creation
-- **Temporary storage option**: Use `/tmp` during scanning to reduce disk writes
+- **Temporary storage option**: On Linux, use `/tmp` by default during scanning to reduce disk writes
 
 ## Building
 
@@ -32,19 +32,24 @@ bun tauri build
 bun tauri dev
 ```
 
-The database is stored in the app data directory (`~/.local/share/com.duped.app/`).
+On Linux, scans use `/tmp` by default while building results, then move the finished database into the app data directory.
+On other platforms, the database is stored directly in the app data directory (`~/.local/share/com.duped.app/`) unless temporary storage is explicitly enabled.
 
 ### Temporary Storage Mode
 
-You can enable temporary storage mode using either a command-line flag or environment variable:
+You can control temporary storage mode using command-line flags or environment variables:
 
 ```bash
-# Using command-line flag (with built binary)
-./src-tauri/target/release/duped --tmp-db
+# Disable /tmp usage, even on Linux where it is the default
+./src-tauri/target/release/duped --no-tmp-db
 
-# Using environment variable (works with both dev and release)
+# Force-enable /tmp usage on platforms where it is not the default
 DUPED_TMP_DB=1 bun tauri dev
 DUPED_TMP_DB=1 ./src-tauri/target/release/duped
+
+# Force-disable /tmp usage
+DUPED_NO_TMP_DB=1 bun tauri dev
+DUPED_NO_TMP_DB=1 ./src-tauri/target/release/duped
 ```
 
 When temporary storage mode is enabled:
@@ -57,6 +62,10 @@ This is particularly useful when:
 - Scanning large directories with millions of files
 - You want to minimize wear on SSDs
 - Your main storage is slow or network-mounted
+
+Linux note:
+- This project now defaults to `/tmp` on Linux because it is commonly backed by `tmpfs`
+- macOS and other platforms do not assume the same memory-backed behavior by default
 
 ## Architecture
 

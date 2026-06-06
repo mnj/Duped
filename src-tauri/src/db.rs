@@ -505,7 +505,10 @@ impl Database {
         Ok(groups)
     }
 
-    pub fn rebuild_duplicate_groups(&self, scan_id: i64) -> Result<()> {
+    pub fn rebuild_duplicate_groups<F>(&self, scan_id: i64, is_aborted: F) -> Result<()>
+    where
+        F: Fn() -> bool,
+    {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM duplicate_group_files WHERE group_id IN (SELECT id FROM duplicate_groups WHERE scan_id = ?1)", params![scan_id])?;
         conn.execute("DELETE FROM duplicate_groups WHERE scan_id = ?1", params![scan_id])?;
@@ -537,6 +540,9 @@ impl Database {
         )?;
 
         for (hash, size, file_count) in groups {
+            if is_aborted() {
+                break;
+            }
             insert_group.execute(params![scan_id, hash, size, file_count, size * (file_count - 1)])?;
             let group_id = conn.last_insert_rowid();
             let file_ids: Vec<i64> = files_stmt
@@ -551,7 +557,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn rebuild_photo_groups(&self, scan_id: i64, threshold: i64) -> Result<()> {
+    pub fn rebuild_photo_groups<F>(&self, scan_id: i64, threshold: i64, is_aborted: F) -> Result<()>
+    where
+        F: Fn() -> bool,
+    {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM photo_group_files WHERE group_id IN (SELECT id FROM photo_groups WHERE scan_id = ?1 AND threshold = ?2)",
@@ -582,7 +591,7 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
 
-        let groups = build_photo_groups_for_threshold(&files, threshold as f64)?;
+        let groups = build_photo_groups_for_threshold(&files, threshold as f64, &is_aborted)?;
 
         let mut insert_group = conn.prepare_cached(
             "INSERT INTO photo_groups (scan_id, threshold, file_count, min_similarity, avg_similarity)
@@ -594,6 +603,9 @@ impl Database {
         )?;
 
         for group in groups {
+            if is_aborted() {
+                break;
+            }
             insert_group.execute(params![
                 scan_id,
                 threshold,
@@ -635,6 +647,7 @@ fn nearest_photo_threshold(min_similarity: f64) -> i64 {
 fn build_photo_groups_for_threshold(
     files: &[FileRecord],
     threshold: f64,
+    is_aborted: &impl Fn() -> bool,
 ) -> Result<Vec<MaterializedPhotoGroup>> {
     let n = files.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -663,8 +676,14 @@ fn build_photo_groups_for_threshold(
     }
 
     for i in 0..n {
+        if is_aborted() {
+            break;
+        }
         if let Some(phash_a) = files[i].phash {
             for j in (i + 1)..n {
+                if is_aborted() {
+                    break;
+                }
                 if let Some(phash_b) = files[j].phash {
                     let sim = crate::phasher::similarity_pct(phash_a, phash_b);
                     if sim >= threshold {

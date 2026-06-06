@@ -1,5 +1,5 @@
 <script>
-  import { formatBytes, trashFile } from "../../stores.js";
+  import { formatBytes, trashFile, replaceWithSymlink } from "../../stores.js";
 
   let { groups = [] } = $props();
 
@@ -25,6 +25,13 @@
   async function handleTrash(path) {
     if (confirm(`Move "${fileName(path)}" to trash?`)) {
       await trashFile(path);
+    }
+  }
+
+  async function handleSymlink(path, targetPath) {
+    if (!targetPath) return;
+    if (confirm(`Replace "${fileName(path)}" with a symlink to "${fileName(targetPath)}"?`)) {
+      await replaceWithSymlink(path, targetPath);
     }
   }
 </script>
@@ -75,6 +82,9 @@
           <div class="sbs-actions">
             <button class="sbs-keep" onclick={() => handleTrash(currentGroup.files[i === 0 ? 1 : 0].path)}>
               Keep This
+            </button>
+            <button class="sbs-keep" onclick={() => handleSymlink(file.path, currentGroup.files[i === 0 ? 1 : 0].path)}>
+              Symlink This
             </button>
             <button class="sbs-trash" onclick={() => handleTrash(file.path)}>
               Trash This
