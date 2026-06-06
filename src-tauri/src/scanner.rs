@@ -1,4 +1,5 @@
 use crate::db::{Database, FileRecord};
+use crate::phasher;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use std::error::Error;
@@ -97,6 +98,7 @@ pub fn walk_and_collect<P: AsRef<Path>>(
             hash: None,
             size: metadata.len() as i64,
             modified,
+            phash: None,
         });
 
         progress.files_walked.fetch_add(1, Ordering::Relaxed);
@@ -158,6 +160,57 @@ pub fn hash_candidates(
             if let Some(h) = hash {
                 let _ = db.update_file_hash(&path, &h);
             }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn phash_images(
+    db: &Database,
+    scan_id: i64,
+    progress: &ScanProgress,
+) -> Result<(), Box<dyn Error>> {
+    use std::path::PathBuf;
+
+    let db_path = {
+        let all_files = db.get_files_for_scan(scan_id)?;
+        all_files
+            .into_iter()
+            .filter(|f| {
+                let p = PathBuf::from(&f.path);
+                phasher::is_image_file(&p)
+            })
+            .map(|f| f.path)
+            .collect::<Vec<_>>()
+    };
+
+    let total = db_path.len() as u64;
+    progress.files_to_hash.store(total, Ordering::Relaxed);
+
+    let results: Vec<(String, Option<i64>)> = db_path
+        .par_iter()
+        .filter_map(|path| {
+            if progress.is_aborted() {
+                return None;
+            }
+            let p = Path::new(path);
+            match phasher::compute_phash(p) {
+                Ok(h) => {
+                    progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+                    Some((path.clone(), Some(h)))
+                }
+                Err(_) => {
+                    progress.files_hashed.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            }
+        })
+        .collect();
+
+    for (path, h) in results {
+        if let Some(phash) = h {
+            let _ = db.update_file_phash(&path, phash);
         }
     }
 

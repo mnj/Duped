@@ -10,6 +10,7 @@ pub struct FileRecord {
     pub hash: Option<String>,
     pub size: i64,
     pub modified: i64,
+    pub phash: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +71,7 @@ impl Database {
                 hash TEXT,
                 size INTEGER NOT NULL,
                 modified INTEGER NOT NULL,
+                phash INTEGER,
                 FOREIGN KEY (scan_id) REFERENCES scans(id)
             );
 
@@ -125,11 +127,11 @@ impl Database {
     pub fn batch_insert_files(&self, scan_id: i64, files: &[FileRecord]) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare_cached(
-            "INSERT OR IGNORE INTO files (scan_id, path, hash, size, modified) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO files (scan_id, path, hash, size, modified, phash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         let mut count = 0;
         for f in files {
-            count += stmt.execute(params![scan_id, f.path, f.hash, f.size, f.modified])?;
+            count += stmt.execute(params![scan_id, f.path, f.hash, f.size, f.modified, f.phash])?;
         }
         Ok(count)
     }
@@ -139,6 +141,15 @@ impl Database {
         conn.execute(
             "UPDATE files SET hash = ?1 WHERE path = ?2",
             params![hash, path],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_file_phash(&self, path: &str, phash: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET phash = ?1 WHERE path = ?2",
+            params![phash, path],
         )?;
         Ok(())
     }
@@ -173,7 +184,7 @@ impl Database {
         let mut result = Vec::new();
         for (hash, size) in groups {
             let mut file_stmt = conn.prepare(
-                "SELECT id, path, hash, size, modified FROM files
+                "SELECT id, path, hash, size, modified, phash FROM files
                  WHERE scan_id = ?1 AND hash = ?2
                  ORDER BY path",
             )?;
@@ -186,6 +197,7 @@ impl Database {
                         hash: row.get(2)?,
                         size: row.get(3)?,
                         modified: row.get(4)?,
+                        phash: row.get(5)?,
                     })
                 })?
                 .filter_map(|r| r.ok())
@@ -284,7 +296,7 @@ impl Database {
     pub fn get_files_by_size_groups(&self, scan_id: i64) -> Result<Vec<Vec<FileRecord>>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, path, hash, size, modified FROM files
+            "SELECT id, path, hash, size, modified, phash FROM files
              WHERE scan_id = ?1 AND size IN (
                 SELECT size FROM files WHERE scan_id = ?1 GROUP BY size HAVING COUNT(*) > 1
              )
@@ -299,6 +311,7 @@ impl Database {
                     hash: row.get(2)?,
                     size: row.get(3)?,
                     modified: row.get(4)?,
+                    phash: row.get(5)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -350,7 +363,7 @@ impl Database {
     pub fn get_files_for_scan(&self, scan_id: i64) -> Result<Vec<FileRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, path, hash, size, modified FROM files WHERE scan_id = ?1 ORDER BY path",
+            "SELECT id, path, hash, size, modified, phash FROM files WHERE scan_id = ?1 ORDER BY path",
         )?;
 
         let files: Vec<FileRecord> = stmt
@@ -361,6 +374,7 @@ impl Database {
                     hash: row.get(2)?,
                     size: row.get(3)?,
                     modified: row.get(4)?,
+                    phash: row.get(5)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -383,5 +397,54 @@ impl Database {
             params![scan_id, path, hash, size, modified],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_photo_candidates(
+        &self,
+        scan_id: i64,
+        min_similarity: f64,
+    ) -> Result<Vec<(FileRecord, FileRecord)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, hash, size, modified, phash FROM files
+             WHERE scan_id = ?1 AND phash IS NOT NULL
+             ORDER BY path",
+        )?;
+
+        let files: Vec<FileRecord> = stmt
+            .query_map(params![scan_id], |row| {
+                Ok(FileRecord {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    hash: row.get(2)?,
+                    size: row.get(3)?,
+                    modified: row.get(4)?,
+                    phash: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut pairs = Vec::new();
+        for i in 0..files.len() {
+            if let Some(phash_a) = files[i].phash {
+                for j in (i + 1)..files.len() {
+                    if let Some(phash_b) = files[j].phash {
+                        let sim = crate::phasher::similarity_pct(phash_a, phash_b);
+                        if sim >= min_similarity {
+                            pairs.push((files[i].clone(), files[j].clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        pairs.sort_by(|a, b| {
+            let sim_a = crate::phasher::similarity_pct(a.0.phash.unwrap(), a.1.phash.unwrap());
+            let sim_b = crate::phasher::similarity_pct(b.0.phash.unwrap(), b.1.phash.unwrap());
+            sim_b.partial_cmp(&sim_a).unwrap()
+        });
+
+        Ok(pairs)
     }
 }

@@ -1,5 +1,5 @@
-use crate::db::{Database, DuplicateGroup, ScanInfo, Stats};
-use crate::scanner::{hash_candidates, walk_and_collect, ScanProgress};
+use crate::db::{Database, DuplicateGroup, FileRecord, ScanInfo, Stats};
+use crate::scanner::{hash_candidates, phash_images, walk_and_collect, ScanProgress};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -25,6 +25,13 @@ pub struct ScanComplete {
 pub struct MergeResult {
     pub scans_merged: usize,
     pub files_merged: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PhotoPair {
+    pub file_a: FileRecord,
+    pub file_b: FileRecord,
+    pub similarity: f64,
 }
 
 pub struct AppState {
@@ -141,6 +148,10 @@ pub async fn start_scan(
 
         if !progress.is_aborted() {
             let _ = hash_candidates(&db, scan_id, &progress);
+        }
+
+        if !progress.is_aborted() {
+            let _ = phash_images(&db, scan_id, &progress);
         }
 
         if progress.is_aborted() {
@@ -391,6 +402,32 @@ pub fn trash_file(path: String) -> Result<(), String> {
     trash::delete(&path).map_err(|e| format!("Failed to trash file: {}", e))
 }
 
+#[tauri::command]
+pub fn get_photo_pairs(
+    state: tauri::State<'_, AppState>,
+    min_similarity: f64,
+) -> Result<Vec<PhotoPair>, String> {
+    let db = get_db(&state)?;
+    let scan_id = get_scan_id(&state)?;
+    let candidates = db
+        .get_photo_candidates(scan_id, min_similarity)
+        .map_err(|e| format!("Failed to get photo candidates: {}", e))?;
+
+    let pairs: Vec<PhotoPair> = candidates
+        .into_iter()
+        .map(|(a, b)| {
+            let similarity = crate::phasher::similarity_pct(a.phash.unwrap(), b.phash.unwrap());
+            PhotoPair {
+                file_a: a,
+                file_b: b,
+                similarity,
+            }
+        })
+        .collect();
+
+    Ok(pairs)
+}
+
 fn get_dismissed_scans(dir: &PathBuf) -> Result<Vec<PathBuf>, String> {
     let config_path = dir.join("dismissed.json");
     if !config_path.exists() {
@@ -458,6 +495,10 @@ pub async fn add_path_to_scan(
 
         if !progress.is_aborted() {
             let _ = hash_candidates(&db, scan_id, &progress);
+        }
+
+        if !progress.is_aborted() {
+            let _ = phash_images(&db, scan_id, &progress);
         }
 
         if progress.is_aborted() {

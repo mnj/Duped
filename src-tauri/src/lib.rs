@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod phasher;
 mod scanner;
 
 use commands::AppState;
@@ -9,6 +10,7 @@ pub fn run(use_tmp_db: bool) {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(AppState::new(use_tmp_db))
         .invoke_handler(tauri::generate_handler![
             commands::start_scan,
@@ -26,6 +28,7 @@ pub fn run(use_tmp_db: bool) {
             commands::trash_file,
             commands::add_path_to_scan,
             commands::merge_databases,
+            commands::get_photo_pairs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
