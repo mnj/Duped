@@ -1,13 +1,17 @@
 <script>
-  import { appState, subscribe, setView, loadDuplicates, formatBytes, formatNumber } from "../stores.js";
+  import { appState, subscribe, setView, setActiveView, loadMoreDuplicates, formatBytes, formatNumber } from "../stores.js";
   import CardGrid from "./views/CardGrid.svelte";
   import TableView from "./views/TableView.svelte";
   import SplitPane from "./views/SplitPane.svelte";
   import CompactList from "./views/CompactList.svelte";
   import SideBySide from "./views/SideBySide.svelte";
   import Photo from "./views/Photo.svelte";
+  import { onMount } from "svelte";
 
   let state = $state(appState);
+  let loadMoreTrigger = $state();
+  let observer;
+  let viewContent = $state();
 
   subscribe((s) => {
     state = { ...s };
@@ -23,14 +27,43 @@
   ];
 
   function switchView(id) {
-    appState.activeView = id;
-    appState.selectedGroup = null;
-    subscribe((s) => { state = { ...s }; })();
+    setActiveView(id);
   }
 
   function goHome() {
     setView("home");
   }
+
+  async function maybeLoadMore() {
+    if (state.activeView === "photo") {
+      return;
+    }
+    await loadMoreDuplicates();
+  }
+
+  onMount(() => {
+    observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        maybeLoadMore();
+      }
+    }, {
+      root: viewContent,
+      rootMargin: "600px 0px",
+    });
+
+    if (loadMoreTrigger) {
+      observer.observe(loadMoreTrigger);
+    }
+
+    return () => observer?.disconnect();
+  });
+
+  $effect(() => {
+    if (observer && loadMoreTrigger) {
+      observer.disconnect();
+      observer.observe(loadMoreTrigger);
+    }
+  });
 </script>
 
 <div class="results">
@@ -73,6 +106,10 @@
         <strong>{formatNumber(state.totalGroups)}</strong>
         <span>Duplicate Groups</span>
       </div>
+      <div class="stat-item">
+        <strong>{formatNumber(state.duplicatesLoaded)}</strong>
+        <span>Loaded</span>
+      </div>
       <div class="stat-item accent">
         <strong>{formatNumber(state.stats.duplicate_files)}</strong>
         <span>Duplicate Files</span>
@@ -84,7 +121,7 @@
     </div>
   {/if}
 
-  <div class="view-content">
+  <div class="view-content" bind:this={viewContent}>
     {#if state.activeView === "grid"}
       <CardGrid groups={state.duplicates} />
     {:else if state.activeView === "table"}
@@ -97,6 +134,17 @@
       <SideBySide groups={state.duplicates} />
     {:else if state.activeView === "photo"}
       <Photo />
+    {/if}
+
+    {#if state.activeView !== "photo"}
+      <div class="results-pagination">
+        {#if state.loadingMoreDuplicates}
+          <div class="results-loading">Loading more groups...</div>
+        {:else if state.hasMoreDuplicates}
+          <div class="results-loading">Scroll to load more groups</div>
+        {/if}
+        <div bind:this={loadMoreTrigger} class="results-sentinel" aria-hidden="true"></div>
+      </div>
     {/if}
   </div>
 </div>

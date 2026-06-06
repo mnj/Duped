@@ -94,14 +94,25 @@ impl Database {
         Ok(())
     }
 
-    pub fn create_scan(&self, path: &str) -> Result<i64> {
+    pub fn get_or_create_scan(&self, path: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
-        let now = chrono::Utc::now().timestamp();
-        conn.execute(
-            "INSERT INTO scans (path, started_at, status) VALUES (?1, ?2, 'running')",
-            params![path, now],
+        let mut stmt = conn.prepare(
+            "SELECT id FROM scans ORDER BY id DESC LIMIT 1",
         )?;
-        Ok(conn.last_insert_rowid())
+
+        let existing = stmt.query_row([], |row| row.get(0));
+        match existing {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                let now = chrono::Utc::now().timestamp();
+                conn.execute(
+                    "INSERT INTO scans (path, started_at, status) VALUES (?1, ?2, 'running')",
+                    params![path, now],
+                )?;
+                Ok(conn.last_insert_rowid())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     pub fn complete_scan(&self, scan_id: i64) -> Result<()> {
@@ -127,7 +138,13 @@ impl Database {
     pub fn batch_insert_files(&self, scan_id: i64, files: &[FileRecord]) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare_cached(
-            "INSERT OR IGNORE INTO files (scan_id, path, hash, size, modified, phash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO files (scan_id, path, hash, size, modified, phash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                scan_id = excluded.scan_id,
+                hash = excluded.hash,
+                size = excluded.size,
+                modified = excluded.modified,
+                phash = excluded.phash",
         )?;
         let mut count = 0;
         for f in files {
@@ -293,6 +310,23 @@ impl Database {
         )
     }
 
+    pub fn get_latest_scan_info(&self) -> Result<ScanInfo> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, path, started_at, completed_at, status FROM scans ORDER BY id DESC LIMIT 1",
+            [],
+            |row| {
+                Ok(ScanInfo {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    started_at: row.get(2)?,
+                    completed_at: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            },
+        )
+    }
+
     pub fn get_files_by_size_groups(&self, scan_id: i64) -> Result<Vec<Vec<FileRecord>>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -338,28 +372,6 @@ impl Database {
         Ok(groups)
     }
 
-    pub fn get_all_scans(&self) -> Result<Vec<ScanInfo>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, path, started_at, completed_at, status FROM scans ORDER BY id",
-        )?;
-
-        let scans: Vec<ScanInfo> = stmt
-            .query_map([], |row| {
-                Ok(ScanInfo {
-                    id: row.get(0)?,
-                    path: row.get(1)?,
-                    started_at: row.get(2)?,
-                    completed_at: row.get(3)?,
-                    status: row.get(4)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(scans)
-    }
-
     pub fn get_files_for_scan(&self, scan_id: i64) -> Result<Vec<FileRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -383,18 +395,25 @@ impl Database {
         Ok(files)
     }
 
-    pub fn insert_file(
+    pub fn insert_or_replace_file(
         &self,
         scan_id: i64,
         path: &str,
         hash: Option<&str>,
         size: i64,
         modified: i64,
+        phash: Option<i64>,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO files (scan_id, path, hash, size, modified) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![scan_id, path, hash, size, modified],
+            "INSERT INTO files (scan_id, path, hash, size, modified, phash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                scan_id = excluded.scan_id,
+                hash = excluded.hash,
+                size = excluded.size,
+                modified = excluded.modified,
+                phash = excluded.phash",
+            params![scan_id, path, hash, size, modified, phash],
         )?;
         Ok(conn.last_insert_rowid())
     }

@@ -124,7 +124,7 @@ pub async fn start_scan(
     );
 
     let scan_id = db
-        .create_scan(&path)
+        .get_or_create_scan(&path)
         .map_err(|e| format!("Failed to create scan: {}", e))?;
 
     {
@@ -271,7 +271,7 @@ pub fn open_database(
         Arc::new(Database::new(&path).map_err(|e| format!("Failed to open database: {}", e))?);
 
     let scan_id = db
-        .get_scan_info(1)
+        .get_latest_scan_info()
         .map_err(|e| format!("Failed to get scan info: {}", e))?
         .id;
 
@@ -485,8 +485,8 @@ pub async fn add_path_to_scan(
     );
 
     let scan_id = db
-        .create_scan(&new_path)
-        .map_err(|e| format!("Failed to create scan: {}", e))?;
+        .get_or_create_scan(&new_path)
+        .map_err(|e| format!("Failed to get scan: {}", e))?;
 
     {
         let mut db_lock = state.db.lock().unwrap();
@@ -605,46 +605,42 @@ pub fn merge_databases(
             .clone()
     };
 
-    let source_scans = source_db
-        .get_all_scans()
-        .map_err(|e| format!("Failed to get source scans: {}", e))?;
+    let target_scan_id = target_db
+        .get_or_create_scan("merged")
+        .map_err(|e| format!("Failed to get target scan: {}", e))?;
 
     let mut files_merged = 0;
-    let mut scans_merged = 0;
 
-    for source_scan in source_scans {
-        let new_scan_id = target_db
-            .create_scan(&source_scan.path)
-            .map_err(|e| format!("Failed to create scan: {}", e))?;
+    let source_scan = source_db
+        .get_latest_scan_info()
+        .map_err(|e| format!("Failed to get source scan: {}", e))?;
 
-        let source_files = source_db
-            .get_files_for_scan(source_scan.id)
-            .map_err(|e| format!("Failed to get source files: {}", e))?;
+    let source_files = source_db
+        .get_files_for_scan(source_scan.id)
+        .map_err(|e| format!("Failed to get source files: {}", e))?;
 
-        for file in source_files {
-            target_db
-                .insert_file(
-                    new_scan_id,
-                    &file.path,
-                    file.hash.as_deref(),
-                    file.size,
-                    file.modified,
-                )
-                .map_err(|e| format!("Failed to insert file: {}", e))?;
-            files_merged += 1;
-        }
+    for file in source_files {
+        target_db
+            .insert_or_replace_file(
+                target_scan_id,
+                &file.path,
+                file.hash.as_deref(),
+                file.size,
+                file.modified,
+                file.phash,
+            )
+            .map_err(|e| format!("Failed to insert file: {}", e))?;
+        files_merged += 1;
+    }
 
-        if source_scan.status == "completed" {
-            let _ = target_db.complete_scan(new_scan_id);
-        }
-
-        scans_merged += 1;
+    if source_scan.status == "completed" {
+        let _ = target_db.complete_scan(target_scan_id);
     }
 
     let _ = target_db.create_indexes();
 
     Ok(MergeResult {
-        scans_merged,
+        scans_merged: 1,
         files_merged,
     })
 }

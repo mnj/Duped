@@ -7,6 +7,10 @@ export const appState = {
   scanning: false,
   progress: null,
   duplicates: [],
+  duplicatesPageSize: 100,
+  duplicatesLoaded: 0,
+  loadingMoreDuplicates: false,
+  hasMoreDuplicates: false,
   totalGroups: 0,
   stats: null,
   dbPath: null,
@@ -37,6 +41,14 @@ function clearScanListeners() {
 function resetScanState() {
   appState.scanning = false;
   appState.progress = null;
+}
+
+function resetDuplicateState() {
+  appState.duplicates = [];
+  appState.duplicatesLoaded = 0;
+  appState.loadingMoreDuplicates = false;
+  appState.hasMoreDuplicates = false;
+  appState.totalGroups = 0;
 }
 
 async function attachScanListeners({ finalizeTmpDb }) {
@@ -74,6 +86,12 @@ export function setView(view) {
   notify();
 }
 
+export function setActiveView(view) {
+  appState.activeView = view;
+  appState.selectedGroup = null;
+  notify();
+}
+
 export async function startScan(path) {
   clearScanListeners();
   appState.scanning = true;
@@ -93,7 +111,8 @@ export async function abortScan() {
 export async function openDatabase(path) {
   clearScanListeners();
   resetScanState();
-  const info = await invoke("open_database", { path });
+  resetDuplicateState();
+  await invoke("open_database", { path });
   appState.dbPath = path;
   appState.stats = await invoke("get_stats");
   await loadDuplicates();
@@ -104,16 +123,35 @@ export async function openDatabase(path) {
 export async function loadDuplicates() {
   const count = await invoke("get_duplicate_count");
   appState.totalGroups = count;
-  appState.duplicates = await invoke("get_duplicates_paginated", { offset: 0, limit: 100 });
+  const limit = appState.duplicatesPageSize;
+  appState.duplicates = await invoke("get_duplicates_paginated", { offset: 0, limit });
+  appState.duplicatesLoaded = appState.duplicates.length;
+  appState.hasMoreDuplicates = appState.duplicatesLoaded < appState.totalGroups;
   appState.stats = await invoke("get_stats");
   notify();
 }
 
-export async function loadMoreDuplicates(offset, limit = 100) {
-  const more = await invoke("get_duplicates_paginated", { offset, limit });
-  appState.duplicates = [...appState.duplicates, ...more];
+export async function loadMoreDuplicates() {
+  if (appState.loadingMoreDuplicates || !appState.hasMoreDuplicates) {
+    return 0;
+  }
+
+  appState.loadingMoreDuplicates = true;
   notify();
-  return more.length;
+
+  try {
+    const offset = appState.duplicatesLoaded;
+    const limit = appState.duplicatesPageSize;
+    const more = await invoke("get_duplicates_paginated", { offset, limit });
+    appState.duplicates = [...appState.duplicates, ...more];
+    appState.duplicatesLoaded += more.length;
+    appState.hasMoreDuplicates = appState.duplicatesLoaded < appState.totalGroups;
+    notify();
+    return more.length;
+  } finally {
+    appState.loadingMoreDuplicates = false;
+    notify();
+  }
 }
 
 export async function trashFile(path) {
@@ -133,6 +171,7 @@ export async function trashFile(path) {
 
 export async function addPathToScan(dbPath, newPath) {
   clearScanListeners();
+  resetDuplicateState();
   appState.scanning = true;
   appState.view = "scanning";
   appState.progress = { phase: "walking", files_walked: 0, files_to_hash: 0, files_hashed: 0, bytes_hashed: 0 };
