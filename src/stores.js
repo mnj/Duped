@@ -15,6 +15,8 @@ export const appState = {
 };
 
 export const listeners = new Set();
+let scanProgressUnlisten = null;
+let scanCompleteUnlisten = null;
 
 export function subscribe(fn) {
   listeners.add(fn);
@@ -25,38 +27,61 @@ export function notify() {
   listeners.forEach((fn) => fn(appState));
 }
 
-export function setView(view) {
-  appState.view = view;
-  notify();
+function clearScanListeners() {
+  scanProgressUnlisten?.();
+  scanCompleteUnlisten?.();
+  scanProgressUnlisten = null;
+  scanCompleteUnlisten = null;
 }
 
-export async function startScan(path) {
-  appState.scanning = true;
-  appState.view = "scanning";
-  appState.progress = { phase: "walking", files_walked: 0, files_to_hash: 0, files_hashed: 0, bytes_hashed: 0 };
-  notify();
+function resetScanState() {
+  appState.scanning = false;
+  appState.progress = null;
+}
 
-  await listen("scan-progress", (event) => {
+async function attachScanListeners({ finalizeTmpDb }) {
+  clearScanListeners();
+
+  scanProgressUnlisten = await listen("scan-progress", (event) => {
     appState.progress = event.payload;
     notify();
   });
 
-  await listen("scan-complete", async (event) => {
-    appState.scanning = false;
-    appState.progress = null;
+  scanCompleteUnlisten = await listen("scan-complete", async (event) => {
+    clearScanListeners();
+    resetScanState();
     appState.stats = event.payload.stats;
+
     if (!event.payload.aborted) {
-      const newPath = await invoke("finalize_scan");
-      if (newPath) {
-        appState.dbPath = newPath;
+      if (finalizeTmpDb) {
+        const newPath = await invoke("finalize_scan");
+        if (newPath) {
+          appState.dbPath = newPath;
+        }
       }
       await loadDuplicates();
       appState.view = "results";
     } else {
       appState.view = "home";
     }
+
     notify();
   });
+}
+
+export function setView(view) {
+  appState.view = view;
+  notify();
+}
+
+export async function startScan(path) {
+  clearScanListeners();
+  appState.scanning = true;
+  appState.view = "scanning";
+  appState.progress = { phase: "walking", files_walked: 0, files_to_hash: 0, files_hashed: 0, bytes_hashed: 0 };
+  notify();
+
+  await attachScanListeners({ finalizeTmpDb: true });
 
   await invoke("start_scan", { path });
 }
@@ -66,6 +91,8 @@ export async function abortScan() {
 }
 
 export async function openDatabase(path) {
+  clearScanListeners();
+  resetScanState();
   const info = await invoke("open_database", { path });
   appState.dbPath = path;
   appState.stats = await invoke("get_stats");
@@ -105,28 +132,13 @@ export async function trashFile(path) {
 }
 
 export async function addPathToScan(dbPath, newPath) {
+  clearScanListeners();
   appState.scanning = true;
   appState.view = "scanning";
   appState.progress = { phase: "walking", files_walked: 0, files_to_hash: 0, files_hashed: 0, bytes_hashed: 0 };
   notify();
 
-  await listen("scan-progress", (event) => {
-    appState.progress = event.payload;
-    notify();
-  });
-
-  await listen("scan-complete", async (event) => {
-    appState.scanning = false;
-    appState.progress = null;
-    appState.stats = event.payload.stats;
-    if (!event.payload.aborted) {
-      await loadDuplicates();
-      appState.view = "results";
-    } else {
-      appState.view = "home";
-    }
-    notify();
-  });
+  await attachScanListeners({ finalizeTmpDb: false });
 
   await invoke("add_path_to_scan", { dbPath, newPath });
 }

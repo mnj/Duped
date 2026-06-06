@@ -54,6 +54,11 @@ impl AppState {
     }
 }
 
+fn clear_active_scan_state(state: &AppState) {
+    let mut progress_lock = state.progress.lock().unwrap();
+    *progress_lock = None;
+}
+
 fn get_db(state: &AppState) -> Result<Arc<Database>, String> {
     state
         .db
@@ -109,6 +114,8 @@ pub async fn start_scan(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<i64, String> {
+    clear_active_scan_state(&state);
+
     let use_tmp = state.use_tmp_db;
     let db_path = scan_db_path(&app, use_tmp)?;
 
@@ -161,6 +168,8 @@ pub async fn start_scan(
             let _ = db.create_indexes();
         }
 
+        progress.complete();
+
         let stats = db.get_stats(scan_id).unwrap_or(Stats {
             file_count: 0,
             total_size: 0,
@@ -184,20 +193,13 @@ pub async fn start_scan(
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
-            if progress_clone.is_aborted() {
+            if progress_clone.is_aborted() || progress_clone.is_completed() {
                 break;
             }
-            let phase = if progress_clone.files_to_hash.load(std::sync::atomic::Ordering::Relaxed)
-                == 0
-            {
-                "walking"
-            } else {
-                "hashing"
-            };
             let _ = app_clone.emit(
                 "scan-progress",
                 ProgressEvent {
-                    phase: phase.to_string(),
+                    phase: progress_clone.phase_name().to_string(),
                     files_walked: progress_clone
                         .files_walked
                         .load(std::sync::atomic::Ordering::Relaxed),
@@ -241,14 +243,8 @@ pub fn get_progress(state: tauri::State<'_, AppState>) -> Result<ProgressEvent, 
         .cloned()
         .ok_or_else(|| "No active scan".to_string())?;
 
-    let phase = if progress.files_to_hash.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-        "walking"
-    } else {
-        "hashing"
-    };
-
     Ok(ProgressEvent {
-        phase: phase.to_string(),
+        phase: progress.phase_name().to_string(),
         files_walked: progress
             .files_walked
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -269,6 +265,8 @@ pub fn open_database(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<ScanInfo, String> {
+    clear_active_scan_state(&state);
+
     let db =
         Arc::new(Database::new(&path).map_err(|e| format!("Failed to open database: {}", e))?);
 
@@ -480,6 +478,8 @@ pub async fn add_path_to_scan(
     db_path: String,
     new_path: String,
 ) -> Result<i64, String> {
+    clear_active_scan_state(&state);
+
     let db = Arc::new(
         Database::new(&db_path).map_err(|e| format!("Failed to open database: {}", e))?,
     );
@@ -529,6 +529,8 @@ pub async fn add_path_to_scan(
             let _ = db.create_indexes();
         }
 
+        progress.complete();
+
         let stats = db.get_stats(scan_id).unwrap_or(Stats {
             file_count: 0,
             total_size: 0,
@@ -552,20 +554,13 @@ pub async fn add_path_to_scan(
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
-            if progress_clone.is_aborted() {
+            if progress_clone.is_aborted() || progress_clone.is_completed() {
                 break;
             }
-            let phase = if progress_clone.files_to_hash.load(std::sync::atomic::Ordering::Relaxed)
-                == 0
-            {
-                "walking"
-            } else {
-                "hashing"
-            };
             let _ = app_clone.emit(
                 "scan-progress",
                 ProgressEvent {
-                    phase: phase.to_string(),
+                    phase: progress_clone.phase_name().to_string(),
                     files_walked: progress_clone
                         .files_walked
                         .load(std::sync::atomic::Ordering::Relaxed),

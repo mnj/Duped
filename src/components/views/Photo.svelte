@@ -7,9 +7,15 @@
   let minSimilarity = $state(80);
   let currentIndex = $state(0);
   let loading = $state(true);
+  let loadedImages = $state({});
+
+  function resetLoadedImages() {
+    loadedImages = {};
+  }
 
   async function loadPhotos() {
     loading = true;
+    resetLoadedImages();
     try {
       photoGroups = await invoke("get_photo_groups", { minSimilarity: minSimilarity / 100.0 });
     } catch (err) {
@@ -44,6 +50,15 @@
 
   function fileDir(path) {
     return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  function markLoaded(path) {
+    loadedImages = { ...loadedImages, [path]: true };
+  }
+
+  function markFailed(path, event) {
+    event.currentTarget.style.display = "none";
+    loadedImages = { ...loadedImages, [path]: false };
   }
 
   async function handleTrash(path) {
@@ -125,8 +140,11 @@
                 src={convertFileSrc(file.path)}
                 alt={fileName(file.path)}
                 class="photo-img"
-                onerror={(e) => { e.target.style.display = 'none'; }}
+                class:loaded={loadedImages[file.path] === true}
+                onload={() => markLoaded(file.path)}
+                onerror={(e) => markFailed(file.path, e)}
               />
+              {#if loadedImages[file.path] !== true}
               <div class="photo-placeholder">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -135,6 +153,7 @@
                 </svg>
                 <span>{fileName(file.path)}</span>
               </div>
+              {/if}
             </div>
             <div class="photo-meta">
               <span class="photo-name">{fileName(file.path)}</span>

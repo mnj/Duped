@@ -1454,9 +1454,14 @@ code {
 }
 
 .photo-img {
+  display: none;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.photo-img.loaded {
+  display: block;
 }
 
 .photo-placeholder {

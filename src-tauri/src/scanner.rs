@@ -8,12 +8,18 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+pub const PHASE_WALKING: u8 = 0;
+pub const PHASE_HASHING: u8 = 1;
+pub const PHASE_PHASHING: u8 = 2;
+
 pub struct ScanProgress {
     pub files_walked: AtomicU64,
     pub files_to_hash: AtomicU64,
     pub files_hashed: AtomicU64,
     pub bytes_hashed: AtomicU64,
+    pub phase: AtomicU64,
     pub aborted: AtomicBool,
+    pub completed: AtomicBool,
 }
 
 impl ScanProgress {
@@ -23,7 +29,9 @@ impl ScanProgress {
             files_to_hash: AtomicU64::new(0),
             files_hashed: AtomicU64::new(0),
             bytes_hashed: AtomicU64::new(0),
+            phase: AtomicU64::new(PHASE_WALKING as u64),
             aborted: AtomicBool::new(false),
+            completed: AtomicBool::new(false),
         }
     }
 
@@ -33,6 +41,26 @@ impl ScanProgress {
 
     pub fn is_aborted(&self) -> bool {
         self.aborted.load(Ordering::SeqCst)
+    }
+
+    pub fn complete(&self) {
+        self.completed.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_completed(&self) -> bool {
+        self.completed.load(Ordering::SeqCst)
+    }
+
+    pub fn set_phase(&self, phase: u8) {
+        self.phase.store(phase as u64, Ordering::SeqCst);
+    }
+
+    pub fn phase_name(&self) -> &'static str {
+        match self.phase.load(Ordering::SeqCst) as u8 {
+            PHASE_HASHING => "hashing",
+            PHASE_PHASHING => "phashing",
+            _ => "walking",
+        }
     }
 }
 
@@ -123,6 +151,7 @@ pub fn hash_candidates(
 ) -> Result<(), Box<dyn Error>> {
     let size_groups = db.get_files_by_size_groups(scan_id)?;
 
+    progress.set_phase(PHASE_HASHING);
     let total_to_hash: u64 = size_groups.iter().map(|g| g.len() as u64).sum();
     progress
         .files_to_hash
@@ -186,6 +215,9 @@ pub fn phash_images(
     };
 
     let total = db_path.len() as u64;
+    progress.set_phase(PHASE_PHASHING);
+    progress.files_hashed.store(0, Ordering::Relaxed);
+    progress.bytes_hashed.store(0, Ordering::Relaxed);
     progress.files_to_hash.store(total, Ordering::Relaxed);
 
     let results: Vec<(String, Option<i64>)> = db_path
