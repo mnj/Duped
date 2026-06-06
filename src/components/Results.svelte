@@ -4,6 +4,7 @@
   import TableView from "./views/TableView.svelte";
   import SplitPane from "./views/SplitPane.svelte";
   import CompactList from "./views/CompactList.svelte";
+  import SideBySide from "./views/SideBySide.svelte";
 
   let state = $state(appState);
 
@@ -16,6 +17,7 @@
     { id: "table", label: "Table", icon: "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" },
     { id: "split", label: "Split Pane", icon: "M3 3h18v18H3zM12 3v18" },
     { id: "compact", label: "Compact List", icon: "M3 6h18M3 12h18M3 18h18" },
+    { id: "sidebyside", label: "Side-by-Side", icon: "M3 3h18v18H3zM12 3v18" },
   ];
 
   function switchView(id) {
@@ -89,6 +91,8 @@
       <SplitPane groups={state.duplicates} />
     {:else if state.activeView === "compact"}
       <CompactList groups={state.duplicates} />
+    {:else if state.activeView === "sidebyside"}
+      <SideBySide groups={state.duplicates} />
     {/if}
   </div>
 </div>

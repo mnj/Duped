@@ -1085,6 +1085,183 @@ code {
   color: var(--red);
 }
 
+/* Side-by-Side */
+.side-by-side {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 1rem;
+}
+
+.sbs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sbs-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sbs-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sbs-nav button:hover:not(:disabled) {
+  background: var(--bg4);
+  color: var(--text);
+}
+
+.sbs-counter {
+  font-size: 0.9rem;
+  color: var(--text2);
+  font-weight: 500;
+  min-width: 60px;
+  text-align: center;
+}
+
+.sbs-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.sbs-hash {
+  font-size: 0.75rem;
+  color: var(--text3);
+  word-break: break-all;
+}
+
+.sbs-size {
+  font-size: 0.85rem;
+  color: var(--text2);
+}
+
+.sbs-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  flex: 1;
+}
+
+.sbs-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  gap: 1.5rem;
+}
+
+.sbs-panel-header {
+  width: 100%;
+  text-align: center;
+}
+
+.sbs-panel-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sbs-file-icon {
+  color: var(--text3);
+}
+
+.sbs-file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.sbs-file-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.sbs-file-dir {
+  font-size: 0.8rem;
+  color: var(--text3);
+  word-break: break-all;
+}
+
+.sbs-file-size {
+  font-size: 0.9rem;
+  color: var(--text2);
+}
+
+.sbs-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: auto;
+}
+
+.sbs-actions button {
+  padding: 0.6rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sbs-keep {
+  background: var(--bg3);
+  color: var(--green);
+  border: 1px solid var(--border);
+}
+
+.sbs-keep:hover {
+  background: var(--bg4);
+  border-color: var(--green);
+}
+
+.sbs-trash {
+  background: var(--bg3);
+  color: var(--red);
+  border: 1px solid var(--border);
+}
+
+.sbs-trash:hover {
+  background: var(--bg4);
+  border-color: var(--red);
+}
+
+.sbs-more {
+  text-align: center;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text2);
+  font-size: 0.9rem;
+}
+
 /* Empty state */
 .empty {
   display: flex;
