@@ -565,6 +565,7 @@ code {
 .file-info {
   display: flex;
   flex-direction: column;
+  flex: 1;
 }
 
 .file-name {
@@ -578,6 +579,30 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trash-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text3);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.file-card:hover .trash-btn {
+  display: flex;
+}
+
+.trash-btn:hover {
+  background: var(--bg2);
+  color: var(--red);
 }
 
 /* Table View */

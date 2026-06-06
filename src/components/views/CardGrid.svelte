@@ -1,5 +1,5 @@
 <script>
-  import { formatBytes, formatNumber } from "../../stores.js";
+  import { formatBytes, formatNumber, trashFile } from "../../stores.js";
 
   let { groups = [] } = $props();
 
@@ -20,6 +20,13 @@
 
   function fileDir(path) {
     return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  async function handleTrash(e, path) {
+    e.stopPropagation();
+    if (confirm(`Move "${fileName(path)}" to trash?`)) {
+      await trashFile(path);
+    }
   }
 </script>
 
@@ -64,6 +71,12 @@
                   <span class="file-name">{fileName(file.path)}</span>
                   <span class="file-dir">{fileDir(file.path)}</span>
                 </div>
+                <button class="trash-btn" onclick={(e) => handleTrash(e, file.path)} aria-label="Move to trash">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
               </div>
             {/each}
           </div>

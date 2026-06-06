@@ -1,5 +1,5 @@
 <script>
-  import { formatBytes } from "../../stores.js";
+  import { formatBytes, trashFile } from "../../stores.js";
   import { appState, subscribe } from "../../stores.js";
 
   let { groups = [] } = $props();
@@ -28,6 +28,12 @@
 
   function next() {
     if (selectedIndex < groups.length - 1) selectedIndex++;
+  }
+
+  async function handleTrash(path) {
+    if (confirm(`Move "${fileName(path)}" to trash?`)) {
+      await trashFile(path);
+    }
   }
 </script>
 
@@ -99,7 +105,7 @@
               </div>
               <div class="file-actions">
                 <button class="keep" title="Keep this file">Keep</button>
-                <button class="delete" title="Delete this file">Delete</button>
+                <button class="delete" title="Move to trash" onclick={() => handleTrash(file.path)}>Delete</button>
               </div>
             </div>
           {/each}

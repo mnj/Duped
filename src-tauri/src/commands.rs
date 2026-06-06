@@ -380,6 +380,11 @@ pub fn dismiss_scan(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn trash_file(path: String) -> Result<(), String> {
+    trash::delete(&path).map_err(|e| format!("Failed to trash file: {}", e))
+}
+
 fn get_dismissed_scans(dir: &PathBuf) -> Result<Vec<PathBuf>, String> {
     let config_path = dir.join("dismissed.json");
     if !config_path.exists() {

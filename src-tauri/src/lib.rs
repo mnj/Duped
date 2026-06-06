@@ -23,6 +23,7 @@ pub fn run(use_tmp_db: bool) {
             commands::get_db_path,
             commands::dismiss_scan,
             commands::finalize_scan,
+            commands::trash_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

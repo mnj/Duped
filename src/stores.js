@@ -89,6 +89,21 @@ export async function loadMoreDuplicates(offset, limit = 100) {
   return more.length;
 }
 
+export async function trashFile(path) {
+  try {
+    await invoke("trash_file", { path });
+    appState.duplicates = appState.duplicates.map(group => ({
+      ...group,
+      files: group.files.filter(f => f.path !== path)
+    })).filter(group => group.files.length > 1);
+    notify();
+    return true;
+  } catch (err) {
+    console.error("Failed to trash file:", err);
+    return false;
+  }
+}
+
 export async function listScans() {
   return await invoke("list_scans");
 }
